@@ -1,6 +1,6 @@
 # Control Financiero — laptop + Pixel + Render
 
-Esta versión conserva las pantallas funcionales del HTML anterior y agrega un backend Flask, cuentas individuales, permisos administrador/usuario, PostgreSQL para datos compartidos y una versión instalable como PWA en Chrome para Android. La app **no está desplegada todavía**; el código está preparado para probarse localmente y publicar desde GitHub en Render. Importante: ejecutar `python app.py` en la laptop usa una base SQLite local separada; para que laptop y Pixel compartan la misma información, abre la URL HTTPS de Render en ambos dispositivos.
+Esta versión conserva las pantallas funcionales del HTML anterior y agrega un backend Flask, cuentas individuales, permisos administrador/usuario, PostgreSQL con un espacio financiero privado por usuario y una versión instalable como PWA en Chrome para Android. Esta carpeta contiene la actualización de privacidad. Para activarla en una instalación Render existente, incorpora los archivos actualizados a su repositorio y espera a que termine el despliegue. Importante: ejecutar `python app.py` en la laptop usa una base SQLite local separada; para que laptop y Pixel compartan la misma información, abre la URL HTTPS de Render en ambos dispositivos.
 
 ## Corrección visual (versión 2)
 
@@ -12,9 +12,9 @@ Si la versión publicada parpadea después de iniciar sesión, publica esta vers
 - Ingreso con usuario y contraseña; no hay creación pública de cuentas.
 - La primera cuenta administradora se crea con un token de configuración de un solo uso. El token deja de servir automáticamente después de crear la primera cuenta.
 - El administrador puede autorizar/desactivar usuarios. Las nuevas cuentas reciben una contraseña temporal que se muestra una sola vez y deben cambiar al primer ingreso.
-- Los usuarios autorizados ven el mismo conjunto de ingresos, presupuestos, gastos y deudas en laptop y teléfono.
-- Los cambios se guardan en una base de datos; la sincronización utiliza revisión y detección de cambios simultáneos para evitar sobrescribir silenciosamente modificaciones ajenas.
-- Los usuarios normales no pueden borrar registros ni gestionar cuentas; esas funciones son exclusivas del administrador.
+- Cada cuenta ve únicamente sus propios ingresos, presupuestos, gastos, deudas y registros escolares. Los datos de esa cuenta sí se sincronizan entre su laptop y su Pixel.
+- Los cambios se guardan en un estado separado por usuario en la misma base de datos; la sincronización utiliza revisión y detección de cambios simultáneos dentro de ese espacio privado.
+- Todos los usuarios pueden administrar sus propios registros financieros. Solo el administrador puede gestionar cuentas y contraseñas.
 - Contraseñas con hash, sesiones HttpOnly, SameSite, cookie Secure en Render, protección CSRF para solicitudes modificadoras, limitación básica de intentos, límites de tamaño y cabeceras de seguridad.
 - Registro de auditoría para inicio de sesión, cambios de datos y gestión de usuarios.
 - PWA instalable. El shell puede quedar almacenado, pero las cuentas, lecturas y escrituras de datos financieros requieren conexión al servidor. Las llamadas API no se guardan en la caché.
@@ -67,8 +67,8 @@ Abre `http://127.0.0.1:5000`. En la primera pantalla introduce el valor de `BOOT
 
 ## Datos y seguridad — leer antes de usar
 
-- Todas las cuentas activas autorizadas comparten los mismos datos financieros; no hay espacios de datos independientes por usuario en esta versión.
-- El rol **Usuario autorizado** puede añadir/actualizar registros, ingreso y presupuesto; el administrador puede además borrar registros y gestionar usuarios.
+- Cada cuenta tiene sus propios datos financieros privados. El mismo usuario sincroniza su información entre sus dispositivos; no se comparte con otras cuentas.
+- Todos los usuarios autenticados pueden gestionar sus propios registros financieros. El rol **Administrador** sirve para crear/desactivar cuentas y restablecer claves; no concede visibilidad sobre las finanzas personales de otras cuentas.
 - No se implementan recuperación de contraseña por correo ni invitaciones por email; un administrador debe coordinar el restablecimiento si alguien pierde acceso. No reutilices contraseñas importantes.
 - No guardes datos de tarjetas completas, claves bancarias, PIN o credenciales financieras en campos de descripción.
 - La tasa BCV conserva el mecanismo remoto de consulta del HTML original y necesita internet. Si falla, se conserva la última tasa en memoria/base de datos.
@@ -85,7 +85,7 @@ El almacenamiento del navegador no se comparte entre `file://` y la dirección `
 3. Pega el contenido copiado en un editor de texto en modo texto plano y guárdalo como `respaldo-antiguo.json`.
 4. Entra a la versión nueva como administrador → **Usuarios** → **Importar respaldo antiguo** y selecciona el JSON.
 
-La importación solo se acepta si ingresos, presupuestos, gastos y deudas en la nube están vacíos. Comprueba los montos y saldos después de importarlos. El menú de Usuarios también permite descargar un respaldo JSON de los datos compartidos y restablecer contraseñas temporales.
+La importación solo se acepta si ingresos, presupuestos, gastos y deudas en la nube están vacíos. Comprueba los montos y saldos después de importarlos. El menú de Usuarios permite administrar cuentas y restablecer contraseñas. La importación de datos antiguos está restringida al espacio privado de la cuenta que inicia la importación.
 
 ## Prueba de humo (opcional)
 
@@ -95,13 +95,13 @@ Después de instalar las dependencias, ejecuta desde la carpeta del proyecto:
 python tests/smoke_test.py
 ```
 
-Este script crea una base SQLite temporal y comprueba la configuración inicial, inicio de sesión, contraseña temporal, acceso compartido y que los usuarios normales no puedan borrar gastos ni administrar cuentas.
+Este script crea una base SQLite temporal y comprueba la configuración inicial, inicio de sesión, contraseña temporal, aislamiento financiero entre cuentas y que los usuarios normales no puedan administrar otras cuentas.
 
 ## Nuevas funciones de ingresos y colegio
 
 - En **Ingresos**, registra sueldo, bono, cestatickets u otro ingreso, con monto por pago, moneda, frecuencia quincenal/mensual/ocasional y días de pago. Los ingresos recurrentes quincenales se estiman como dos pagos al mes para el resumen.
 - En **Colegio**, registra compromisos por estudiante, concepto, monto, fecha de vencimiento y notas. Registra pagos parciales o totales con fecha, método y referencia; la pantalla calcula el saldo pendiente y conserva el historial.
-- Los datos nuevos se guardan en el mismo estado compartido de PostgreSQL que gastos y deudas, por lo que se comparten entre laptop y Pixel cuando el despliegue actualizado está activo.
+- Los datos nuevos se guardan en el estado privado del usuario en PostgreSQL, y se sincronizan entre su laptop y Pixel cuando el despliegue actualizado está activo.
 - Los pagos escolares también se reflejan como movimientos de gasto para que afecten el cálculo de disponible. No registres el mismo pago manualmente en Gastos, porque se duplicaría.
 
 Tras desplegar, recarga la web para actualizar la PWA. Verifica con un gasto de prueba y elimínalo después, y confirma que se vea en ambos dispositivos antes de cargar datos reales.
@@ -113,7 +113,7 @@ Tras desplegar, recarga la web para actualizar la PWA. Verifica con un gasto de 
 - Completa para cada deuda activa su cuota mínima/obligatoria mensual y, si la conoces, la tasa por período (mensual o semanal). El botón **Condiciones** permite actualizar esos datos incluso en deudas ya registradas.
 - El simulador primero separa ingreso recurrente, gastos esenciales y reserva; compara las cuotas mínimas con la capacidad protegida; y solo calcula plazo y distribución si se han capturado las cuotas mínimas de todas las deudas activas y caben dentro del presupuesto.
 - Estrategia **avalancha** prioriza la tasa conocida más alta; **bola de nieve** prioriza el saldo más pequeño. La proyección puede ser optimista para deudas cuya tasa no se conoce, ya que no inventa intereses. No incluye comisiones, mora, tasas variables ni penalidades y no sustituye negociar con acreedores o recibir asesoría financiera.
-- El plan se guarda en el mismo estado JSON de PostgreSQL, sin añadir tablas ni eliminar datos existentes. Después de publicar, recarga con `Cmd + Shift + R` en Mac y cierra/reabre la PWA en el Pixel.
+- El plan se guarda en el estado JSON privado de cada usuario en PostgreSQL, sin añadir tablas financieras ni eliminar datos existentes. Después de publicar, recarga con `Cmd + Shift + R` en Mac y cierra/reabre la PWA en el Pixel.
 
 Pruebas adicionales del simulador (requiere Node.js):
 
@@ -126,7 +126,7 @@ node tests/debt_plan_test.js
 
 - En tarjetas de crédito, el formulario de abono permite seleccionar monto mínimo, saldo total restante o monto personalizado.
 - Para deudas distintas de tarjeta se puede registrar un pago realizado o planificarlo para primera/segunda quincena o una fecha específica. Los pagos planificados se guardan separados y no se descuentan del saldo hasta registrar el pago real.
-- Los pagos reales continúan afectando el saldo de la deuda y se reflejan como gastos.
+- Los pagos reales continúan afectando el saldo de la deuda y se reflejan como gastos. Los pagos programados se guardan en el espacio privado de la cuenta y se sincronizan entre sus dispositivos.
 - La fecha de corte y fecha límite de pago son recordatorios ingresados por el usuario; esta versión no consulta el banco ni puede detectar automáticamente un pago bancario. Después de registrar un pago mínimo, revisa el estado de cuenta y actualiza el saldo total manualmente.
 - Antes de usar con dinero real, probar con datos ficticios y revisar la pantalla de planificación, en especial las fechas de quincena y la disponibilidad mensual. La programación se registra, pero aún no se crea una agenda automática de vencimientos con notificaciones.
 
@@ -139,3 +139,23 @@ node tests/debt_plan_test.js
 - Las cuentas de usuario autorizado pueden seguir registrando gastos y nuevos movimientos, pero no pueden editar/eliminar fuentes de ingresos existentes ni alterar los términos de deudas; el servidor valida esto además de la interfaz.
 
 No borres la base de datos para corregir un monto. Estas funciones permiten ajustar el registro y conservan el historial de abonos. Tras subir los archivos al repositorio conectado a Render, espera a que termine el despliegue y recarga en el navegador con una recarga forzada. El service worker usa una versión nueva de caché para descargar los archivos actualizados.
+
+
+## Privacidad por usuario (actualización)
+
+- Cada cuenta tiene un estado financiero privado, asociado en el servidor a su identidad autenticada. No se utiliza el identificador del usuario enviado por el navegador para elegir qué datos leer o modificar.
+- Un usuario no puede leer, reemplazar ni sincronizar datos de otra cuenta a través de `/api/state` o `/api/import-legacy`. El administrador solo administra cuentas y contraseñas; no puede ver las finanzas personales de otras personas desde la aplicación.
+- Al migrar una instalación que tenía un único estado compartido, los datos existentes se conservan en la cuenta del administrador original (el administrador más antiguo). Las demás cuentas empiezan con un estado vacío. Esto evita seguir exponiendo el conjunto antiguo a todos; revisa la asignación histórica después del despliegue. No borra la base de datos ni las filas financieras existentes.
+- Cada usuario puede editar y borrar sus propios ingresos, gastos y deudas. La gestión de cuentas continúa reservada al administrador.
+- La migración añade `user_id` a `shared_state` y un índice único. Haz una copia de seguridad de PostgreSQL antes de desplegar cambios sobre datos reales.
+
+
+## Desplegar la actualización de privacidad por usuario
+
+1. Antes del despliegue, crea/descarga una copia de seguridad de PostgreSQL desde las opciones que tenga disponibles tu plan de Render.
+2. Copia los archivos de esta versión al repositorio privado que ya está conectado al servicio Render, sustituyendo `app.py`, `static/index.html`, `static/service-worker.js`, `README.md` y `tests/smoke_test.py`. Conserva la configuración existente del servicio y no subas secretos (`.env`, `APP_SECRET_KEY` o `BOOTSTRAP_TOKEN`).
+3. Confirma los cambios con Git y haz `git push`; espera a que Render termine el despliegue. Esta versión ejecuta la migración de `shared_state` al iniciar, agregando un propietario por estado financiero.
+4. Por compatibilidad, la antigua fila global se conserva bajo la cuenta del administrador más antiguo. Los demás usuarios empezarán con un estado financiero vacío y separado. No se eliminan los registros antiguos, pero como antes pertenecían a una bolsa compartida, no es posible identificar automáticamente qué fila histórica correspondía a qué persona. Exporta/ revisa esa información con cuidado antes de redistribuirla.
+5. Prueba con dos cuentas: crea un gasto de prueba con cada cuenta y confirma que cada una solo vea el suyo; valida además que el mismo usuario vea sus propios datos tanto en Mac como en Pixel. Después elimina los gastos de prueba.
+
+La verificación completa de API requiere instalar las dependencias de `requirements.txt`. En el entorno de preparación, la sintaxis Python y JavaScript y las instrucciones SQL de migración SQLite se validaron, pero la prueba integral de Flask no pudo ejecutarse porque Flask no estaba instalado.

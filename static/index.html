@@ -46,9 +46,9 @@
             modals: { active: null, data: null }
         };
 
-        // La base de datos del servidor será la fuente compartida. Si existían datos
-        // del HTML anterior en este navegador, los mantenemos en memoria solo para
-        // ofrecer una migración explícita después del primer inicio de sesión.
+        // El servidor guarda un espacio financiero privado por cuenta. Si existían
+        // datos del HTML anterior en este navegador, se conservan solo para ofrecer
+        // la importación protegida del conjunto antiguo al administrador original.
         window.legacyLocalState = null;
         try {
             const oldLocalData = localStorage.getItem('finControlDataLocal');
@@ -88,6 +88,7 @@
             incomeSources: window.state.incomeSources || [],
             schoolExpenses: window.state.schoolExpenses || [],
             schoolPayments: window.state.schoolPayments || [],
+            plannedDebtPayments: window.state.plannedDebtPayments || [],
             debtPlan: window.state.debtPlan || { monthlyEssentials: 0, monthlyCushion: 0, paymentPercent: 60, strategy: 'avalanche', configured: false },
             budgets: window.state.budgets,
             expenses: window.state.expenses,
@@ -158,7 +159,7 @@
                 for (const key of ['currency', 'exchangeRate', 'income', 'budgets', 'debtPlan']) {
                     if (JSON.stringify(latestLocal[key]) !== JSON.stringify(sentData[key])) mergedView[key] = latestLocal[key];
                 }
-                for (const key of ['expenses', 'debts', 'incomeSources', 'schoolExpenses', 'schoolPayments']) {
+                for (const key of ['expenses', 'debts', 'incomeSources', 'schoolExpenses', 'schoolPayments', 'plannedDebtPayments']) {
                     const baseRows = new Map((sentData[key] || []).map(row => [String(row.id), row]));
                     const localRows = new Map((latestLocal[key] || []).map(row => [String(row.id), row]));
                     const remoteRows = new Map((result.data[key] || []).map(row => [String(row.id), row]));
@@ -353,7 +354,7 @@
                 window.legacyLocalState = null;
                 return;
             }
-            if (!confirm('Este navegador contiene registros de la versión anterior. ¿Quieres importarlos al espacio compartido para que estén disponibles en laptop y Pixel? Solo se hará si la base de datos en la nube está vacía. Si cancelas, los datos antiguos locales se conservarán.')) {
+            if (!confirm('Este navegador contiene registros de la versión anterior. ¿Quieres importarlos al espacio privado de esta cuenta para que estén disponibles en tus dispositivos? Solo se hará si la base de datos en la nube está vacía. Si cancelas, los datos antiguos locales se conservarán.')) {
                 window.legacyLocalState = null;
                 return;
             }
@@ -372,7 +373,7 @@
                 window.applySharedData(result.data);
                 window.legacyLocalState = null;
                 try { localStorage.removeItem('finControlDataLocal'); } catch (_) {}
-                window.notify('Datos anteriores enviados a la base compartida.', 'success');
+                window.notify('Datos anteriores importados al espacio privado de esta cuenta.', 'success');
             } catch (error) {
                 window.notify(error.message + ' Los datos locales antiguos se conservaron.', 'error');
             }
@@ -675,7 +676,7 @@
                                     <p class="text-xs text-gray-500 font-medium mb-1">Ingreso Mensual</p>
                                     <h3 class="text-xl font-bold text-gray-800">${window.getDisplayAmount(totals.income)}</h3>
                                 </div>
-                                ${window.state.role === 'supervisor' ? `<button onclick="window.openModal('updateIncome')" title="Editar ingreso base" class="text-gray-400 hover:text-blue-600 bg-white p-1 rounded-full shadow-sm"><i class="fas fa-pen text-sm"></i></button>` : ''}
+                                <button onclick="window.openModal('updateIncome')" title="Editar ingreso base" class="text-gray-400 hover:text-blue-600 bg-white p-1 rounded-full shadow-sm"><i class="fas fa-pen text-sm"></i></button>
                             </div>
                         </div>
                         
@@ -794,9 +795,7 @@
                                 <div class="font-bold text-gray-800">${window.getDisplayAmount(window.convertToUSD(exp.amount, exp.currency))}</div>
                                 <div class="text-[10px] text-gray-400 capitalize px-2 py-0.5 bg-gray-100 rounded inline-block mt-1">${window.escapeHTML(exp.category)}</div>
                             </div>
-                            ${window.state.role === 'supervisor' ? `
-                                <button onclick="window.deleteDocHandler('expenses', '${exp.id}')" class="ml-3 text-red-400 hover:text-red-600 hidden group-hover:block transition-colors"><i class="fas fa-trash"></i></button>
-                            ` : ''}
+                            <button onclick="window.deleteDocHandler('expenses', '${exp.id}')" title="Eliminar gasto de esta cuenta" class="ml-3 text-red-400 hover:text-red-600 transition-colors"><i class="fas fa-trash"></i></button>
                         </div>
                     `).join('')}
                 </div>
@@ -1003,18 +1002,14 @@
                                 <span class="text-xs font-medium text-gray-600">${progress.toFixed(0)}% pagado</span>
                             </div>
 
-                            ${(window.state.role === 'supervisor' || (!isPaidOut && window.state.role === 'deudor')) ? `
-                                <div class="mt-4 flex flex-wrap gap-2 justify-end items-center">
-                                    ${window.state.role === 'supervisor' ? `
-                                        <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-2 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
-                                        <button onclick="window.openModal('editDebt', '${debt.id}')" class="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold">Editar deuda</button>
-                                    ` : ''}
-                                    ${!isPaidOut ? `
-                                        ${window.state.role === 'supervisor' ? `<button onclick="window.openModal('editDebtTerms', '${debt.id}')" class="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold transition-colors">Condiciones</button>` : ''}
-                                        <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors"><i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar</button>
-                                    ` : ''}
-                                </div>
-                            ` : ''}
+                            <div class="mt-4 flex flex-wrap gap-2 justify-end items-center">
+                                <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-2 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
+                                <button onclick="window.openModal('editDebt', '${debt.id}')" class="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold">Editar deuda</button>
+                                ${!isPaidOut ? `
+                                    <button onclick="window.openModal('editDebtTerms', '${debt.id}')" class="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold transition-colors">Condiciones</button>
+                                    <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors"><i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar</button>
+                                ` : ''}
+                            </div>
                         </div>
                     `}).join('')}
                 </div>
@@ -1063,7 +1058,7 @@
                 <div class="mt-4 grid grid-cols-2 gap-3"><div class="bg-blue-50 p-4 rounded-xl"><p class="text-sm text-blue-700">Ingreso recurrente mensual estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD)}</strong></div>
                 <div class="bg-emerald-50 p-4 rounded-xl"><p class="text-sm text-emerald-700">Disponible estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD-window.getTotals().expenses)}</strong></div></div>
               </div>
-              <div class="space-y-3">${rows.length ? rows.map(r=>`<div class="bg-white rounded-xl p-4 border flex flex-wrap justify-between gap-3 items-center"><div class="min-w-0 flex-1"><strong>${window.escapeHTML(labels[r.kind]||r.kind)}${r.name?' · '+window.escapeHTML(r.name):''}</strong><p class="text-sm text-gray-500">${r.frequency==='quincenal'?'Días de pago: '+(r.payDays||[]).join(' y '):r.frequency==='mensual'?'Pago mensual día '+(r.payDays||[]).join(''):'Ingreso ocasional'}</p></div><div class="text-right"><strong>${window.formatMoney(r.amount,r.currency)}</strong><p class="text-xs text-gray-500">${r.frequency==='quincenal'?'por quincena':r.frequency==='mensual'?'por mes':'ocasional'}</p></div>${window.state.role === 'supervisor' ? `<div class="flex gap-2 w-full sm:w-auto"><button onclick="window.openModal('editIncomeSource','${r.id}')" class="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-bold"><i class="fas fa-pen mr-1"></i>Editar</button><button onclick="window.deleteDocHandler('incomeSources','${r.id}')" class="px-3 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-bold"><i class="fas fa-trash mr-1"></i>Eliminar</button></div>` : ''}</div>`).join('') : '<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Todavía no has registrado fuentes de ingreso.</div>'}</div>
+              <div class="space-y-3">${rows.length ? rows.map(r=>`<div class="bg-white rounded-xl p-4 border flex flex-wrap justify-between gap-3 items-center"><div class="min-w-0 flex-1"><strong>${window.escapeHTML(labels[r.kind]||r.kind)}${r.name?' · '+window.escapeHTML(r.name):''}</strong><p class="text-sm text-gray-500">${r.frequency==='quincenal'?'Días de pago: '+(r.payDays||[]).join(' y '):r.frequency==='mensual'?'Pago mensual día '+(r.payDays||[]).join(''):'Ingreso ocasional'}</p></div><div class="text-right"><strong>${window.formatMoney(r.amount,r.currency)}</strong><p class="text-xs text-gray-500">${r.frequency==='quincenal'?'por quincena':r.frequency==='mensual'?'por mes':'ocasional'}</p></div><div class="flex gap-2 w-full sm:w-auto"><button onclick="window.openModal('editIncomeSource','${r.id}')" class="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-bold"><i class="fas fa-pen mr-1"></i>Editar</button><button onclick="window.deleteDocHandler('incomeSources','${r.id}')" class="px-3 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-bold"><i class="fas fa-trash mr-1"></i>Eliminar</button></div></div>`).join('') : '<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Todavía no has registrado fuentes de ingreso.</div>'}</div>
             </div>`;
         };
         const renderSchool = () => {
@@ -1339,7 +1334,6 @@
                   <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Día de pago 1<input name="day1" type="number" min="1" max="31" value="15" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Día de pago 2<input name="day2" type="number" min="1" max="31" value="30" class="w-full border rounded-xl p-3"></label></div>
                   <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar ingreso</button></form>`;
             } else if (window.state.modals.active === 'editIncomeSource') {
-                if (window.state.role !== 'supervisor') return '';
                 const row = (window.state.incomeSources||[]).find(x=>String(x.id)===String(window.state.modals.data));
                 if (!row) return '';
                 title = 'Editar ingreso';
@@ -1384,7 +1378,6 @@
                     <label class="block text-sm">Estrategia<select name="strategy" class="mt-1 w-full border rounded-xl p-3 bg-white"><option value="avalanche" ${plan.strategy!=='snowball'?'selected':''}>Avalancha: mayor interés primero</option><option value="snowball" ${plan.strategy==='snowball'?'selected':''}>Bola de nieve: saldo menor primero</option></select></label>
                     <button type="submit" class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar capacidad</button></form>`;
             } else if (window.state.modals.active === 'editDebt') {
-                if (window.state.role !== 'supervisor') return '';
                 const debt = (window.state.debts||[]).find(x=>String(x.id)===String(window.state.modals.data));
                 if (!debt) return '';
                 title = 'Editar deuda';
@@ -1476,7 +1469,6 @@
                 });
             } 
             else if (type === 'editDebt') {
-                if (window.state.role !== 'supervisor') { window.showToast('Solo el administrador puede editar deudas.', 'error'); return; }
                 const debt = (window.state.debts||[]).find(row => String(row.id) === String(data.debtId));
                 if (debt) {
                     const amount = Number(data.amount);
@@ -1532,7 +1524,6 @@
                 window.state.incomeSources.unshift({id:uniqueId,kind:data.kind,name:data.name||'',amount:parseFloat(data.amount),currency:data.currency,frequency,payDays:frequency==='quincenal'?[Number(data.day1)||15,Number(data.day2)||30]:frequency==='mensual'?[Number(data.day1)||30]:[]});
             }
             else if (type === 'editIncomeSource') {
-                if (window.state.role !== 'supervisor') { window.showToast('Solo el administrador puede editar ingresos.', 'error'); return; }
                 const row = (window.state.incomeSources||[]).find(item => String(item.id) === String(data.incomeId));
                 if (row) {
                     const amount = Number(data.amount);

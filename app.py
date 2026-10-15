@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 
+from sqlalchemy import inspect as sqlalchemy_inspect
+
 from dotenv import load_dotenv
 from flask import Flask, abort, g, jsonify, request, send_from_directory, session
 from flask_limiter import Limiter
@@ -62,6 +64,7 @@ DEFAULT_SHARED_DATA = {
     "debts": [],
     "schoolExpenses": [],  # compromisos/cargos del colegio
     "schoolPayments": [],  # pagos parciales o totales de esos compromisos
+    "plannedDebtPayments": [],  # agenda personal de pagos futuros de deuda
     "debtPlan": {"monthlyEssentials": 0.0, "monthlyCushion": 0.0, "paymentPercent": 60, "strategy": "avalanche", "configured": False},
 }
 
@@ -77,7 +80,11 @@ class User(db.Model):
 
 
 class SharedState(db.Model):
-    id = db.Column(db.Integer, primary_key=True, default=1)
+    id = db.Column(db.Integer, primary_key=True)
+    # Cada fila contiene los datos financieros privados de exactamente una cuenta.
+    # Nullable durante la migración de la antigua fila compartida; la migración
+    # asigna esa información histórica al administrador original.
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     revision = db.Column(db.Integer, nullable=False, default=0)
     data = db.Column(db.JSON, nullable=False, default=lambda: copy.deepcopy(DEFAULT_SHARED_DATA))
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -93,20 +100,72 @@ class AuditEvent(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
 
 
-def ensure_shared_state() -> SharedState:
-    record = db.session.get(SharedState, 1)
-    if record is None:
-        record = SharedState(id=1, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA))
-        db.session.add(record)
+def ensure_user_state(user_id: int) -> SharedState:
+    """Return only this account's private financial state, creating it if needed."""
+    record = SharedState.query.filter_by(user_id=user_id).first()
+    if record is not None:
+        return record
+
+    # Recovery for a legacy database whose original singleton row had no owner
+    # because it was created before any user existed. Only the sole initial admin
+    # may claim it; never hand an orphaned state to an arbitrary later member.
+    user = db.session.get(User, user_id)
+    orphan = SharedState.query.filter(SharedState.user_id.is_(None)).order_by(SharedState.id.asc()).first()
+    if orphan is not None and user and user.role == "admin" and User.query.count() == 1:
+        orphan.user_id = user_id
         try:
             db.session.commit()
+            return orphan
         except Exception:
-            # Multiple Gunicorn workers may race during the first startup.
             db.session.rollback()
-            record = db.session.get(SharedState, 1)
-            if record is None:
-                raise
+            record = SharedState.query.filter_by(user_id=user_id).first()
+            if record is not None:
+                return record
+            raise
+
+    record = SharedState(user_id=user_id, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA), updated_by=user_id)
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except Exception:
+        # Multiple workers may initialize the same user simultaneously.
+        db.session.rollback()
+        record = SharedState.query.filter_by(user_id=user_id).first()
+        if record is None:
+            raise
     return record
+
+
+def migrate_shared_state_schema() -> None:
+    """Migrate the old single shared record without deleting financial data.
+
+    The old app did not record which account owned each record. To avoid exposing
+    that historical common pool to every new account, it is retained under the
+    earliest administrator; every other account receives an empty private state.
+    """
+    inspector = sqlalchemy_inspect(db.engine)
+    if "shared_state" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("shared_state")}
+    if "user_id" not in columns:
+        db.session.execute(db.text('ALTER TABLE shared_state ADD COLUMN user_id INTEGER REFERENCES "user" (id)'))
+        db.session.commit()
+
+    first_admin = User.query.filter_by(role="admin").order_by(User.created_at.asc(), User.id.asc()).first()
+    if first_admin is None:
+        first_admin = User.query.order_by(User.created_at.asc(), User.id.asc()).first()
+    if first_admin is not None:
+        db.session.execute(
+            db.text("UPDATE shared_state SET user_id = :user_id WHERE user_id IS NULL"),
+            {"user_id": first_admin.id},
+        )
+        db.session.commit()
+
+    # Unique owner index prevents accidental duplicate state rows per account.
+    db.session.execute(db.text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_shared_state_user_id ON shared_state (user_id)"
+    ))
+    db.session.commit()
 
 
 def audit(action: str, detail: str = "", user_id: int | None = None) -> None:
@@ -384,6 +443,38 @@ def normalize_shared_data(value) -> dict:
             "notes": str(row.get("notes") or "")[:250],
         })
     result["schoolPayments"] = payment_rows
+
+    raw_planned = value.get("plannedDebtPayments", [])
+    if not isinstance(raw_planned, list) or len(raw_planned) > 10000:
+        raise ValueError("La colección plannedDebtPayments no es válida.")
+    planned_rows = []
+    valid_schedule_types = {"quincena1", "quincena2", "date"}
+    valid_statuses = {"planned", "paid", "cancelled"}
+    for row in raw_planned:
+        if not isinstance(row, dict) or not row.get("id") or not row.get("debtId"):
+            continue
+        item_id, debt_id = str(row.get("id")), str(row.get("debtId"))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", item_id) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", debt_id):
+            continue
+        try:
+            amount = float(row.get("amount", 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
+            continue
+        schedule_type = row.get("scheduleType") if row.get("scheduleType") in valid_schedule_types else "date"
+        planned_rows.append({
+            "id": item_id, "debtId": debt_id,
+            "entity": str(row.get("entity") or "")[:120],
+            "description": str(row.get("description") or "Pago de deuda")[:250],
+            "amount": amount,
+            "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
+            "scheduleType": schedule_type,
+            "scheduledDate": str(row.get("scheduledDate") or "")[:40],
+            "status": row.get("status") if row.get("status") in valid_statuses else "planned",
+            "createdAt": str(row.get("createdAt") or "")[:40],
+        })
+    result["plannedDebtPayments"] = planned_rows
     return result
 
 
@@ -440,13 +531,13 @@ def three_way_merge(base_data, incoming_data, current_data):
     current = normalize_shared_data(current_data)
     merged = copy.deepcopy(current)
     conflicts = []
-    for key in ("currency", "exchangeRate", "income", "budgets"):
+    for key in ("currency", "exchangeRate", "income", "budgets", "debtPlan"):
         if incoming[key] != base[key]:
             if current[key] != base[key] and current[key] != incoming[key]:
                 conflicts.append(key)
             else:
                 merged[key] = incoming[key]
-    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments"):
+    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments"):
         merged[key], row_conflicts = merge_array(base[key], incoming[key], current[key])
         if row_conflicts:
             conflicts.extend([f"{key}:{x}" for x in row_conflicts])
@@ -534,16 +625,10 @@ def setup_admin():
     user = User(username=username, password_hash=generate_password_hash(password), role="admin", must_change_password=False)
     db.session.add(user)
     db.session.flush()
-    shared = db.session.get(SharedState, 1)
-    if shared is None:
-        shared = SharedState(id=1, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA), updated_by=user.id)
-        db.session.add(shared)
-    else:
-        shared.revision = 0
-        shared.data = copy.deepcopy(DEFAULT_SHARED_DATA)
-        shared.updated_by = user.id
-        shared.updated_at = datetime.now(timezone.utc)
+    # Never reset any financial state while creating the first account. If a
+    # migrated orphan exists it will be claimed by ensure_user_state below.
     db.session.commit()
+    ensure_user_state(user.id)
     session.clear()
     session["uid"] = user.id
     session["csrf_token"] = secrets.token_urlsafe(32)
@@ -601,7 +686,7 @@ def change_password():
 @app.get("/api/state")
 @require_auth()
 def get_state():
-    record = ensure_shared_state()
+    record = ensure_user_state(g.user.id)
     return jsonify(data=normalize_shared_data(record.data), revision=record.revision, updated_at=record.updated_at.isoformat() if record.updated_at else None)
 
 
@@ -617,9 +702,9 @@ def put_state():
         base_revision = int(body["base_revision"])
     except (ValueError, TypeError, OverflowError):
         return jsonify(error="Los datos enviados no son válidos."), 400
-    record = db.session.query(SharedState).filter_by(id=1).with_for_update().first()
+    record = db.session.query(SharedState).filter_by(user_id=g.user.id).with_for_update().first()
     if record is None:
-        record = SharedState(id=1, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA))
+        record = SharedState(user_id=g.user.id, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA), updated_by=g.user.id)
         db.session.add(record)
         db.session.flush()
     current = normalize_shared_data(record.data)
@@ -627,74 +712,12 @@ def put_state():
         merged, conflicts = incoming, []
     else:
         merged, conflicts = three_way_merge(base_data, incoming, current)
-    if g.user.role != "admin" and not conflicts:
-        # Shared financial details can only be edited by an administrator.
-        # Members may still append new income sources, expenses and debt payments,
-        # but may not overwrite existing salary/debt records or reset shared figures.
-        if merged.get("income") != current.get("income"):
-            db.session.rollback()
-            return jsonify(error="Solo el administrador puede modificar el ingreso base."), 403
-        current_income_rows = {str(item.get("id")): item for item in current.get("incomeSources", []) if isinstance(item, dict) and item.get("id") is not None}
-        merged_income_rows = {str(item.get("id")): item for item in merged.get("incomeSources", []) if isinstance(item, dict) and item.get("id") is not None}
-        if set(current_income_rows) - set(merged_income_rows):
-            db.session.rollback()
-            return jsonify(error="Solo el administrador puede eliminar fuentes de ingreso."), 403
-        for item_id, stored in current_income_rows.items():
-            if merged_income_rows.get(item_id) != stored:
-                db.session.rollback()
-                return jsonify(error="Solo el administrador puede editar fuentes de ingreso existentes."), 403
-        # Enforce permissions against actual stored rows, never against client-supplied
-        # base data (which can be tampered with).
-        for collection in ("expenses", "debts"):
-            current_rows = {str(item.get("id")): item for item in current.get(collection, []) if isinstance(item, dict) and item.get("id") is not None}
-            merged_rows = {str(item.get("id")): item for item in merged.get(collection, []) if isinstance(item, dict) and item.get("id") is not None}
-            if set(current_rows) - set(merged_rows):
-                db.session.rollback()
-                return jsonify(error="Solo el administrador puede eliminar gastos o deudas."), 403
-            for item_id, stored in current_rows.items():
-                proposed = merged_rows[item_id]
-                if collection == "expenses" and proposed != stored:
-                    db.session.rollback()
-                    return jsonify(error="Los usuarios autorizados pueden agregar gastos, pero solo el administrador puede modificar o eliminar registros existentes."), 403
-                if collection == "debts":
-                    stored_terms = {key: value for key, value in stored.items() if key != "paid"}
-                    proposed_terms = {key: value for key, value in proposed.items() if key != "paid"}
-                    try:
-                        new_paid = float(proposed.get("paid", 0) or 0)
-                        old_paid = float(stored.get("paid", 0) or 0)
-                    except (TypeError, ValueError):
-                        new_paid, old_paid = -1, 0
-                    if stored_terms != proposed_terms or new_paid < old_paid or new_paid > float(stored.get("amount", 0)):
-                        db.session.rollback()
-                        return jsonify(error="Solo se permite abonar a deudas existentes; sus términos solo los administra el administrador."), 403
-                    payment_delta = round(new_paid - old_paid, 2)
-                    if payment_delta > 0:
-                        current_expense_ids = {str(item.get("id")) for item in current["expenses"] if item.get("id") is not None}
-                        matching_payment = any(
-                            str(item.get("id")) not in current_expense_ids and
-                            str(item.get("description", "")).startswith(f"Abono/Pago Deuda: {stored.get('entity', '')}") and
-                            round(float(item.get("amount", 0) or 0), 2) == payment_delta and
-                            item.get("currency") == stored.get("currency")
-                            for item in merged["expenses"]
-                        )
-                        if not matching_payment:
-                            db.session.rollback()
-                            return jsonify(error="Para registrar un abono, guarda al mismo tiempo el movimiento de pago correspondiente."), 403
-        # Un usuario autorizado puede registrar gastos/pagos escolares nuevos, pero no
-        # alterar o eliminar registros ya existentes. El administrador sí puede hacerlo.
-        for collection in ("schoolExpenses", "schoolPayments"):
-            current_rows = {str(item.get("id")): item for item in current.get(collection, []) if item.get("id") is not None}
-            merged_rows = {str(item.get("id")): item for item in merged.get(collection, []) if item.get("id") is not None}
-            if set(current_rows) - set(merged_rows):
-                db.session.rollback()
-                return jsonify(error="Solo el administrador puede eliminar registros escolares o sus pagos."), 403
-            for item_id, stored in current_rows.items():
-                if merged_rows.get(item_id) != stored:
-                    db.session.rollback()
-                    return jsonify(error="Los registros escolares y sus pagos no se pueden modificar después de guardarse; registra un nuevo movimiento o solicita al administrador que lo corrija."), 403
+    # Every authenticated account owns this row, so each user can manage their
+    # own income, expenses, debts, school records and settings. Account
+    # administration remains separately restricted by require_auth(admin=True).
     if conflicts:
         db.session.rollback()
-        latest = ensure_shared_state()
+        latest = ensure_user_state(g.user.id)
         return jsonify(error="Otra persona modificó los mismos datos. Se cargó la versión más reciente; revisa y vuelve a aplicar tu cambio.", conflicts=conflicts, data=normalize_shared_data(latest.data), revision=latest.revision), 409
     school_error = validate_school_balances(merged)
     if school_error:
@@ -710,16 +733,16 @@ def put_state():
 
 
 @app.post("/api/import-legacy")
-@require_auth(admin=True)
+@require_auth()
 def import_legacy_state():
     body = request.get_json(silent=True) or {}
     try:
         incoming = normalize_shared_data(body.get("data"))
     except (ValueError, TypeError, OverflowError):
         return jsonify(error="El archivo de respaldo no contiene datos válidos."), 400
-    record = db.session.query(SharedState).filter_by(id=1).with_for_update().first()
+    record = db.session.query(SharedState).filter_by(user_id=g.user.id).with_for_update().first()
     if record is None:
-        record = SharedState(id=1, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA))
+        record = SharedState(user_id=g.user.id, revision=0, data=copy.deepcopy(DEFAULT_SHARED_DATA), updated_by=g.user.id)
         db.session.add(record)
         db.session.flush()
     current = normalize_shared_data(record.data)
@@ -729,12 +752,12 @@ def import_legacy_state():
         return jsonify(error=school_error), 400
     financially_empty = (
         not current["expenses"] and not current["debts"] and not current["incomeSources"] and
-        not current["schoolExpenses"] and not current["schoolPayments"] and
+        not current["schoolExpenses"] and not current["schoolPayments"] and not current["plannedDebtPayments"] and
         float(current["income"].get("amount", 0) or 0) == 0 and
         all(float(value or 0) == 0 for value in current["budgets"].values()) and
         not current["debtPlan"].get("configured", False)
     )
-    incoming_has_data = bool(incoming["expenses"] or incoming["debts"] or incoming["incomeSources"] or incoming["schoolExpenses"] or incoming["schoolPayments"] or float(incoming["income"].get("amount", 0) or 0) or any(float(v or 0) for v in incoming["budgets"].values()) or incoming["debtPlan"].get("configured", False))
+    incoming_has_data = bool(incoming["expenses"] or incoming["debts"] or incoming["incomeSources"] or incoming["schoolExpenses"] or incoming["schoolPayments"] or incoming["plannedDebtPayments"] or float(incoming["income"].get("amount", 0) or 0) or any(float(v or 0) for v in incoming["budgets"].values()) or incoming["debtPlan"].get("configured", False))
     if not financially_empty:
         db.session.rollback()
         return jsonify(error="La nube ya contiene información. Por seguridad, la importación de un respaldo antiguo solo se permite cuando ingresos, presupuestos, gastos y deudas están vacíos."), 409
@@ -829,7 +852,7 @@ def request_too_large(_error):
 
 with app.app_context():
     db.create_all()
-    ensure_shared_state()
+    migrate_shared_state_schema()
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")), debug=False)

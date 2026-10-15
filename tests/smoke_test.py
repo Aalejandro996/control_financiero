@@ -32,7 +32,7 @@ class ControlFinancieroSmokeTest(unittest.TestCase):
             headers["X-CSRF-Token"] = csrf
         return client.open(path, method=method, json=body, headers=headers)
 
-    def test_setup_login_shared_state_permissions(self):
+    def test_financial_data_is_private_per_user(self):
         status = self.client.get("/api/status").get_json()
         self.assertTrue(status["setup_required"])
 
@@ -44,41 +44,56 @@ class ControlFinancieroSmokeTest(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.get_json())
         admin_csrf = created.get_json()["csrf_token"]
 
-        empty = self.json(self.client, "/api/state")
-        data = empty.get_json()["data"]
-        data["debtPlan"] = {"monthlyEssentials": 1200, "monthlyCushion": 200, "paymentPercent": 65, "strategy": "snowball", "configured": True}
-        data["debts"] = [{"id": "debt-test-1", "type": "prestamo", "amount": 1200, "paid": 0, "currency": "USD", "entity": "Prestamista", "description": "Prueba", "minPayment": 60, "interestRate": 2, "interestPeriod": "mensual", "interestKnown": True}]
-        data["expenses"] = [{"id": "1001", "amount": 12.5, "currency": "USD", "category": "comida", "description": "Almuerzo", "method": "efectivo", "bank": "", "date": "2026-10-14T12:00:00Z"}]
-        saved = self.json(self.client, "/api/state", "PUT", {"base_data": empty.get_json()["data"], "base_revision": empty.get_json()["revision"], "data": data}, admin_csrf)
-        self.assertEqual(saved.status_code, 200, saved.get_json())
-        self.assertEqual(saved.get_json()["data"]["debtPlan"]["strategy"], "snowball")
-        self.assertEqual(saved.get_json()["data"]["debts"][0]["minPayment"], 60)
-        self.assertTrue(saved.get_json()["data"]["debts"][0]["interestKnown"])
+        # The original admin writes a private financial record.
+        empty = self.json(self.client, "/api/state").get_json()
+        admin_data = empty["data"]
+        admin_data["expenses"] = [{"id": "admin-expense-1", "amount": 12.5, "currency": "USD", "category": "comida", "description": "Almuerzo admin", "method": "efectivo", "bank": "", "date": "2026-10-14T12:00:00Z"}]
+        admin_saved = self.json(self.client, "/api/state", "PUT", {"base_data": empty["data"], "base_revision": empty["revision"], "data": admin_data}, admin_csrf)
+        self.assertEqual(admin_saved.status_code, 200, admin_saved.get_json())
+        self.assertEqual(len(admin_saved.get_json()["data"]["expenses"]), 1)
 
-        new_user = self.json(self.client, "/api/users", "POST", {"username": "memberone", "role": "member"}, admin_csrf)
-        self.assertEqual(new_user.status_code, 201, new_user.get_json())
-        temporary_password = new_user.get_json()["temporary_password"]
+        # Create two separate authorized accounts.
+        member1_response = self.json(self.client, "/api/users", "POST", {"username": "memberone", "role": "member"}, admin_csrf)
+        member2_response = self.json(self.client, "/api/users", "POST", {"username": "membertwo", "role": "member"}, admin_csrf)
+        self.assertEqual(member1_response.status_code, 201, member1_response.get_json())
+        self.assertEqual(member2_response.status_code, 201, member2_response.get_json())
 
-        member = self.app.test_client()
-        login = self.json(member, "/api/login", "POST", {"username": "memberone", "password": temporary_password})
-        self.assertEqual(login.status_code, 200, login.get_json())
-        member_csrf = login.get_json()["csrf_token"]
+        def authenticated_member(login_name, temporary_password, new_password):
+            client = self.app.test_client()
+            login = self.json(client, "/api/login", "POST", {"username": login_name, "password": temporary_password})
+            self.assertEqual(login.status_code, 200, login.get_json())
+            csrf = login.get_json()["csrf_token"]
+            changed = self.json(client, "/api/change-password", "POST", {"old_password": temporary_password, "new_password": new_password}, csrf)
+            self.assertEqual(changed.status_code, 200, changed.get_json())
+            return client, changed.get_json()["csrf_token"]
 
-        password_change = self.json(member, "/api/change-password", "POST", {"old_password": temporary_password, "new_password": "member-new-secure-password-987"}, member_csrf)
-        self.assertEqual(password_change.status_code, 200, password_change.get_json())
-        member_csrf = password_change.get_json()["csrf_token"]
+        member1, member1_csrf = authenticated_member("memberone", member1_response.get_json()["temporary_password"], "memberone-new-secure-password-987")
+        member2, _member2_csrf = authenticated_member("membertwo", member2_response.get_json()["temporary_password"], "membertwo-new-secure-password-987")
 
-        member_state = self.json(member, "/api/state").get_json()
-        original = member_state["data"]
-        removed = {**original, "expenses": []}
-        denied = self.json(member, "/api/state", "PUT", {"base_data": original, "base_revision": member_state["revision"], "data": removed}, member_csrf)
-        self.assertEqual(denied.status_code, 403, denied.get_json())
+        # Each member sees an empty, independent state — never the admin's records.
+        member1_state_response = self.json(member1, "/api/state")
+        member1_state = member1_state_response.get_json()
+        self.assertEqual(member1_state_response.status_code, 200)
+        self.assertEqual(member1_state["data"]["expenses"], [])
+        self.assertEqual(member1_state["data"]["debts"], [])
 
-        allowed = self.json(member, "/api/users")
-        self.assertEqual(allowed.status_code, 403, allowed.get_json())
+        # Members are allowed to fully manage their own finances.
+        member1_data = member1_state["data"]
+        member1_data["expenses"] = [{"id": "member1-expense", "amount": 8, "currency": "USD", "category": "transporte", "description": "Transporte propio", "method": "efectivo", "bank": "", "date": "2026-10-14T13:00:00Z"}]
+        member1_saved = self.json(member1, "/api/state", "PUT", {"base_data": member1_state["data"], "base_revision": member1_state["revision"], "data": member1_data}, member1_csrf)
+        self.assertEqual(member1_saved.status_code, 200, member1_saved.get_json())
+        self.assertEqual([x["id"] for x in member1_saved.get_json()["data"]["expenses"]], ["member1-expense"])
 
-        shared = self.json(member, "/api/state").get_json()
-        self.assertEqual(len(shared["data"]["expenses"]), 1)
+        # Neither admin nor another member sees member one's private data.
+        admin_after = self.json(self.client, "/api/state").get_json()
+        self.assertEqual([x["id"] for x in admin_after["data"]["expenses"]], ["admin-expense-1"])
+        member2_after = self.json(member2, "/api/state").get_json()
+        self.assertEqual(member2_after["data"]["expenses"], [])
+        self.assertEqual(member2_after["data"]["debts"], [])
+
+        # User administration remains admin-only.
+        self.assertEqual(self.json(member1, "/api/users").status_code, 403)
+        self.assertEqual(self.json(member1, "/api/audit-log").status_code, 403)
         self.assertEqual(self.client.get("/healthz").status_code, 200)
 
 
