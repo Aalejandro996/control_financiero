@@ -129,3 +129,13 @@ node tests/debt_plan_test.js
 - Los pagos reales continúan afectando el saldo de la deuda y se reflejan como gastos.
 - La fecha de corte y fecha límite de pago son recordatorios ingresados por el usuario; esta versión no consulta el banco ni puede detectar automáticamente un pago bancario. Después de registrar un pago mínimo, revisa el estado de cuenta y actualiza el saldo total manualmente.
 - Antes de usar con dinero real, probar con datos ficticios y revisar la pantalla de planificación, en especial las fechas de quincena y la disponibilidad mensual. La programación se registra, pero aún no se crea una agenda automática de vencimientos con notificaciones.
+
+
+## Edición de deudas e ingresos (versión actualizada)
+
+- En **Deudas**, inicia sesión como administrador y usa el botón **Editar deuda** para cambiar acreedor, descripción, monto original, moneda, cuota mínima, fecha de corte/pago, cuotas, factura e interés. Los abonos ya registrados se conservan y el monto original no puede bajar de lo ya pagado.
+- En **Ingresos**, el administrador puede pulsar **Editar** para modificar sueldo, bono, cestatickets u otro ingreso recurrente, incluyendo monto, moneda, frecuencia y días de pago. También puede eliminar una fuente incorrecta.
+- El lápiz del ingreso base en el resumen solo está visible para el administrador.
+- Las cuentas de usuario autorizado pueden seguir registrando gastos y nuevos movimientos, pero no pueden editar/eliminar fuentes de ingresos existentes ni alterar los términos de deudas; el servidor valida esto además de la interfaz.
+
+No borres la base de datos para corregir un monto. Estas funciones permiten ajustar el registro y conservan el historial de abonos. Tras subir los archivos al repositorio conectado a Render, espera a que termine el despliegue y recarga en el navegador con una recarga forzada. El service worker usa una versión nueva de caché para descargar los archivos actualizados.

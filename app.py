@@ -628,6 +628,21 @@ def put_state():
     else:
         merged, conflicts = three_way_merge(base_data, incoming, current)
     if g.user.role != "admin" and not conflicts:
+        # Shared financial details can only be edited by an administrator.
+        # Members may still append new income sources, expenses and debt payments,
+        # but may not overwrite existing salary/debt records or reset shared figures.
+        if merged.get("income") != current.get("income"):
+            db.session.rollback()
+            return jsonify(error="Solo el administrador puede modificar el ingreso base."), 403
+        current_income_rows = {str(item.get("id")): item for item in current.get("incomeSources", []) if isinstance(item, dict) and item.get("id") is not None}
+        merged_income_rows = {str(item.get("id")): item for item in merged.get("incomeSources", []) if isinstance(item, dict) and item.get("id") is not None}
+        if set(current_income_rows) - set(merged_income_rows):
+            db.session.rollback()
+            return jsonify(error="Solo el administrador puede eliminar fuentes de ingreso."), 403
+        for item_id, stored in current_income_rows.items():
+            if merged_income_rows.get(item_id) != stored:
+                db.session.rollback()
+                return jsonify(error="Solo el administrador puede editar fuentes de ingreso existentes."), 403
         # Enforce permissions against actual stored rows, never against client-supplied
         # base data (which can be tampered with).
         for collection in ("expenses", "debts"):

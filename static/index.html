@@ -590,6 +590,11 @@
                                 <div class="text-xs text-gray-500 font-medium">Tasa BCV</div>
                                 <div id="exchange-rate-value" class="font-bold text-gray-800">Bs. ${window.state.exchangeRate.toFixed(2)}</div>
                             </div>
+                            ${window.state.role === 'supervisor' ? `
+                                <button onclick="window.showUsersManager()" title="Gestionar usuarios" class="bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-2 rounded-xl text-sm font-bold text-blue-700 transition">
+                                    <i class="fas fa-users mr-1"></i><span class="hidden sm:inline">Usuarios</span>
+                                </button>
+                            ` : ''}
                             <button onclick="window.toggleGlobalCurrency()" class="bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-2 rounded-xl text-sm font-bold text-slate-700 transition">
                                 ${window.state.currency === 'USD' ? '<i class="fas fa-dollar-sign mr-1 text-green-600"></i> USD' : '<span class="mr-1 text-blue-600">Bs.</span> VES'}
                             </button>
@@ -670,7 +675,7 @@
                                     <p class="text-xs text-gray-500 font-medium mb-1">Ingreso Mensual</p>
                                     <h3 class="text-xl font-bold text-gray-800">${window.getDisplayAmount(totals.income)}</h3>
                                 </div>
-                                <button onclick="window.openModal('updateIncome')" class="text-gray-400 hover:text-blue-600 bg-white p-1 rounded-full shadow-sm"><i class="fas fa-pen text-sm"></i></button>
+                                ${window.state.role === 'supervisor' ? `<button onclick="window.openModal('updateIncome')" title="Editar ingreso base" class="text-gray-400 hover:text-blue-600 bg-white p-1 rounded-full shadow-sm"><i class="fas fa-pen text-sm"></i></button>` : ''}
                             </div>
                         </div>
                         
@@ -998,15 +1003,16 @@
                                 <span class="text-xs font-medium text-gray-600">${progress.toFixed(0)}% pagado</span>
                             </div>
 
-                            ${!isPaidOut && (window.state.role === 'supervisor' || window.state.role === 'deudor') ? `
-                                <div class="mt-4 flex gap-2 justify-end items-center">
+                            ${(window.state.role === 'supervisor' || (!isPaidOut && window.state.role === 'deudor')) ? `
+                                <div class="mt-4 flex flex-wrap gap-2 justify-end items-center">
                                     ${window.state.role === 'supervisor' ? `
-                                        <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-3 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
+                                        <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-2 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
+                                        <button onclick="window.openModal('editDebt', '${debt.id}')" class="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold">Editar deuda</button>
                                     ` : ''}
-                                    <button onclick="window.openModal('editDebtTerms', '${debt.id}')" class="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold transition-colors">Condiciones</button>
-                                    <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
-                                        <i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar
-                                    </button>
+                                    ${!isPaidOut ? `
+                                        ${window.state.role === 'supervisor' ? `<button onclick="window.openModal('editDebtTerms', '${debt.id}')" class="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold transition-colors">Condiciones</button>` : ''}
+                                        <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors"><i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar</button>
+                                    ` : ''}
                                 </div>
                             ` : ''}
                         </div>
@@ -1057,7 +1063,7 @@
                 <div class="mt-4 grid grid-cols-2 gap-3"><div class="bg-blue-50 p-4 rounded-xl"><p class="text-sm text-blue-700">Ingreso recurrente mensual estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD)}</strong></div>
                 <div class="bg-emerald-50 p-4 rounded-xl"><p class="text-sm text-emerald-700">Disponible estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD-window.getTotals().expenses)}</strong></div></div>
               </div>
-              <div class="space-y-3">${rows.length ? rows.map(r=>`<div class="bg-white rounded-xl p-4 border flex justify-between gap-3 items-center"><div><strong>${window.escapeHTML(labels[r.kind]||r.kind)}${r.name?' · '+window.escapeHTML(r.name):''}</strong><p class="text-sm text-gray-500">${r.frequency==='quincenal'?'Días de pago: '+(r.payDays||[]).join(' y '):r.frequency==='mensual'?'Pago mensual día '+(r.payDays||[]).join(''):'Ingreso ocasional'}</p></div><div class="text-right"><strong>${window.formatMoney(r.amount,r.currency)}</strong><p class="text-xs text-gray-500">${r.frequency==='quincenal'?'por quincena':r.frequency==='mensual'?'por mes':'ocasional'}</p></div></div>`).join('') : '<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Todavía no has registrado fuentes de ingreso.</div>'}</div>
+              <div class="space-y-3">${rows.length ? rows.map(r=>`<div class="bg-white rounded-xl p-4 border flex flex-wrap justify-between gap-3 items-center"><div class="min-w-0 flex-1"><strong>${window.escapeHTML(labels[r.kind]||r.kind)}${r.name?' · '+window.escapeHTML(r.name):''}</strong><p class="text-sm text-gray-500">${r.frequency==='quincenal'?'Días de pago: '+(r.payDays||[]).join(' y '):r.frequency==='mensual'?'Pago mensual día '+(r.payDays||[]).join(''):'Ingreso ocasional'}</p></div><div class="text-right"><strong>${window.formatMoney(r.amount,r.currency)}</strong><p class="text-xs text-gray-500">${r.frequency==='quincenal'?'por quincena':r.frequency==='mensual'?'por mes':'ocasional'}</p></div>${window.state.role === 'supervisor' ? `<div class="flex gap-2 w-full sm:w-auto"><button onclick="window.openModal('editIncomeSource','${r.id}')" class="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-bold"><i class="fas fa-pen mr-1"></i>Editar</button><button onclick="window.deleteDocHandler('incomeSources','${r.id}')" class="px-3 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-bold"><i class="fas fa-trash mr-1"></i>Eliminar</button></div>` : ''}</div>`).join('') : '<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Todavía no has registrado fuentes de ingreso.</div>'}</div>
             </div>`;
         };
         const renderSchool = () => {
@@ -1332,6 +1338,18 @@
                   <label class="block text-sm">Frecuencia<select name="frequency" class="w-full border rounded-xl p-3"><option value="quincenal">Quincenal (dos pagos al mes)</option><option value="mensual">Mensual</option><option value="ocasional">Ocasional / bono único</option></select></label>
                   <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Día de pago 1<input name="day1" type="number" min="1" max="31" value="15" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Día de pago 2<input name="day2" type="number" min="1" max="31" value="30" class="w-full border rounded-xl p-3"></label></div>
                   <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar ingreso</button></form>`;
+            } else if (window.state.modals.active === 'editIncomeSource') {
+                if (window.state.role !== 'supervisor') return '';
+                const row = (window.state.incomeSources||[]).find(x=>String(x.id)===String(window.state.modals.data));
+                if (!row) return '';
+                title = 'Editar ingreso';
+                content = `<form onsubmit="window.handleFormSubmit(event,'editIncomeSource')" class="space-y-3"><input type="hidden" name="incomeId" value="${window.escapeHTML(row.id)}">
+                  <label class="block text-sm">Tipo<select name="kind" class="w-full border rounded-xl p-3"><option value="sueldo" ${row.kind==='sueldo'?'selected':''}>Sueldo</option><option value="bono" ${row.kind==='bono'?'selected':''}>Bono</option><option value="cestatickets" ${row.kind==='cestatickets'?'selected':''}>Cestatickets</option><option value="otro" ${row.kind==='otro'?'selected':''}>Otro</option></select></label>
+                  <label class="block text-sm">Nombre o detalle<input name="name" maxlength="120" value="${window.escapeHTML(row.name||'')}" class="w-full border rounded-xl p-3"></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Monto por pago<input name="amount" type="number" min="0.01" step="0.01" required value="${Number(row.amount)||0}" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Moneda<select name="currency" class="w-full border rounded-xl p-3"><option value="USD" ${row.currency!=='BS'?'selected':''}>USD</option><option value="BS" ${row.currency==='BS'?'selected':''}>Bs / VES</option></select></label></div>
+                  <label class="block text-sm">Frecuencia<select name="frequency" class="w-full border rounded-xl p-3"><option value="quincenal" ${row.frequency==='quincenal'?'selected':''}>Quincenal</option><option value="mensual" ${row.frequency==='mensual'?'selected':''}>Mensual</option><option value="ocasional" ${row.frequency==='ocasional'?'selected':''}>Ocasional / bono único</option></select></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Día de pago 1<input name="day1" type="number" min="1" max="31" value="${Number(row.payDays?.[0])||15}" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Día de pago 2<input name="day2" type="number" min="1" max="31" value="${Number(row.payDays?.[1])||30}" class="w-full border rounded-xl p-3"></label></div>
+                  <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar ingreso</button></form>`;
             } else if (window.state.modals.active === 'addSchoolExpense') {
                 title = 'Registrar gasto escolar';
                 content = `<form onsubmit="window.handleFormSubmit(event,'schoolExpense')" class="space-y-3">
@@ -1365,6 +1383,24 @@
                     <p class="text-xs text-gray-500">Por defecto se destina el 60% del excedente protegido a las deudas y se deja el resto como margen flexible. Puedes moverlo de 30% a 85%.</p>
                     <label class="block text-sm">Estrategia<select name="strategy" class="mt-1 w-full border rounded-xl p-3 bg-white"><option value="avalanche" ${plan.strategy!=='snowball'?'selected':''}>Avalancha: mayor interés primero</option><option value="snowball" ${plan.strategy==='snowball'?'selected':''}>Bola de nieve: saldo menor primero</option></select></label>
                     <button type="submit" class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar capacidad</button></form>`;
+            } else if (window.state.modals.active === 'editDebt') {
+                if (window.state.role !== 'supervisor') return '';
+                const debt = (window.state.debts||[]).find(x=>String(x.id)===String(window.state.modals.data));
+                if (!debt) return '';
+                title = 'Editar deuda';
+                content = `<form onsubmit="window.handleFormSubmit(event,'editDebt')" class="space-y-3 max-h-[70vh] overflow-y-auto px-1 pb-4">
+                  <input type="hidden" name="debtId" value="${window.escapeHTML(debt.id)}">
+                  <label class="block text-sm">Tipo de deuda<select id="editDebtTypeSelect" name="type" required class="w-full border rounded-xl p-3 bg-white"><option value="tdc" ${debt.type==='tdc'?'selected':''}>Tarjeta de crédito</option><option value="cashea" ${debt.type==='cashea'?'selected':''}>Cashea / App de crédito</option><option value="prestamo" ${debt.type==='prestamo'?'selected':''}>Préstamo</option><option value="otro" ${debt.type==='otro'?'selected':''}>Otra deuda</option></select></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Monto original<input name="amount" type="number" min="${Number(debt.paid)||0}" step="0.01" required value="${Number(debt.amount)||0}" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Moneda<select name="currency" class="w-full border rounded-xl p-3 bg-white"><option value="USD" ${debt.currency!=='BS'?'selected':''}>USD</option><option value="BS" ${debt.currency==='BS'?'selected':''}>Bs / VES</option></select></label></div>
+                  <label class="block text-sm">Banco, comercio o acreedor<input name="entity" maxlength="120" required value="${window.escapeHTML(debt.entity||'')}" class="w-full border rounded-xl p-3"></label>
+                  <label class="block text-sm">Descripción<input name="description" maxlength="250" required value="${window.escapeHTML(debt.description||'')}" class="w-full border rounded-xl p-3"></label>
+                  <div class="rounded-xl border bg-purple-50 p-3 space-y-3"><strong class="text-sm text-purple-800">Tarjeta / pago mínimo</strong><label class="block text-sm">Pago mínimo<input name="minPayment" type="number" min="0" step="0.01" value="${Number(debt.minPayment)||0}" class="w-full border rounded-xl p-3 bg-white"></label><div class="grid grid-cols-2 gap-3"><label class="block text-sm">Día de corte<input name="cutDate" type="number" min="1" max="31" value="${window.escapeHTML(debt.cutDate||'')}" class="w-full border rounded-xl p-3 bg-white"></label><label class="block text-sm">Pagar antes de<input name="payBefore" type="date" value="${window.escapeHTML(debt.payBefore||'')}" class="w-full border rounded-xl p-3 bg-white"></label></div></div>
+                  <label class="block text-sm">Cuotas (si aplica)<input name="installments" type="number" min="0" step="1" value="${Number(debt.installments)||0}" class="w-full border rounded-xl p-3"></label>
+                  <label class="block text-sm">Número de factura<input name="invoice" maxlength="100" value="${window.escapeHTML(debt.invoice||'')}" class="w-full border rounded-xl p-3"></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Interés (%)<input name="interestRate" type="number" min="0" max="10000" step="0.01" value="${Number(debt.interestRate)||0}" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Período<select name="interestPeriod" class="w-full border rounded-xl p-3 bg-white"><option value="mensual" ${debt.interestPeriod!=='semanal'?'selected':''}>Mensual</option><option value="semanal" ${debt.interestPeriod==='semanal'?'selected':''}>Semanal</option></select></label></div>
+                  <label class="flex items-center gap-2 text-sm"><input name="interestKnown" type="checkbox" value="yes" ${debt.interestKnown?'checked':''}> Tasa confirmada</label>
+                  <p class="text-xs text-amber-800 bg-amber-50 p-2 rounded-lg">Pagado hasta ahora: ${window.formatMoney(Number(debt.paid)||0,debt.currency)}. El monto original no puede quedar por debajo de lo ya pagado; los abonos registrados se conservan.</p>
+                  <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar cambios de deuda</button></form>`;
             } else if (window.state.modals.active === 'editDebtTerms') {
                 const debt = (window.state.debts||[]).find(x=>String(x.id)===String(window.state.modals.data));
                 if (!debt) return '';
@@ -1439,6 +1475,27 @@
                     interestKnown: data.interestKnown === 'yes'
                 });
             } 
+            else if (type === 'editDebt') {
+                if (window.state.role !== 'supervisor') { window.showToast('Solo el administrador puede editar deudas.', 'error'); return; }
+                const debt = (window.state.debts||[]).find(row => String(row.id) === String(data.debtId));
+                if (debt) {
+                    const amount = Number(data.amount);
+                    if (!Number.isFinite(amount) || amount < Number(debt.paid||0)) { window.showToast('El monto original no puede ser menor que lo ya pagado.', 'error'); return; }
+                    debt.type = ['tdc','cashea','prestamo','otro'].includes(data.type) ? data.type : 'otro';
+                    debt.amount = amount;
+                    debt.currency = data.currency === 'BS' ? 'BS' : 'USD';
+                    debt.entity = String(data.entity||'').trim();
+                    debt.description = String(data.description||'').trim();
+                    debt.minPayment = Math.max(0, Number(data.minPayment)||0);
+                    debt.cutDate = data.cutDate || null;
+                    debt.payBefore = data.payBefore || null;
+                    debt.installments = Math.max(0, parseInt(data.installments||'0',10)||0);
+                    debt.invoice = String(data.invoice||'').trim();
+                    debt.interestRate = Math.max(0, Number(data.interestRate)||0);
+                    debt.interestPeriod = data.interestPeriod === 'semanal' ? 'semanal' : 'mensual';
+                    debt.interestKnown = data.interestKnown === 'yes';
+                }
+            }
             else if (type === 'payDebt') {
                 const debt = window.state.debts.find(d => d.id === data.debtId);
                 if (debt) {
@@ -1473,6 +1530,21 @@
                 const frequency = data.frequency;
                 window.state.incomeSources = window.state.incomeSources || [];
                 window.state.incomeSources.unshift({id:uniqueId,kind:data.kind,name:data.name||'',amount:parseFloat(data.amount),currency:data.currency,frequency,payDays:frequency==='quincenal'?[Number(data.day1)||15,Number(data.day2)||30]:frequency==='mensual'?[Number(data.day1)||30]:[]});
+            }
+            else if (type === 'editIncomeSource') {
+                if (window.state.role !== 'supervisor') { window.showToast('Solo el administrador puede editar ingresos.', 'error'); return; }
+                const row = (window.state.incomeSources||[]).find(item => String(item.id) === String(data.incomeId));
+                if (row) {
+                    const amount = Number(data.amount);
+                    if (!Number.isFinite(amount) || amount <= 0) { window.showToast('Introduce un monto válido mayor que cero.', 'error'); return; }
+                    const frequency = ['quincenal','mensual','ocasional'].includes(data.frequency) ? data.frequency : 'quincenal';
+                    row.kind = ['sueldo','bono','cestatickets','otro'].includes(data.kind) ? data.kind : 'otro';
+                    row.name = String(data.name||'').trim();
+                    row.amount = amount;
+                    row.currency = data.currency === 'BS' ? 'BS' : 'USD';
+                    row.frequency = frequency;
+                    row.payDays = frequency === 'quincenal' ? [Number(data.day1)||15, Number(data.day2)||30] : frequency === 'mensual' ? [Number(data.day1)||30] : [];
+                }
             }
             else if (type === 'schoolExpense') {
                 window.state.schoolExpenses = window.state.schoolExpenses || [];
