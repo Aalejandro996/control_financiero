@@ -46,9 +46,14 @@ class ControlFinancieroSmokeTest(unittest.TestCase):
 
         empty = self.json(self.client, "/api/state")
         data = empty.get_json()["data"]
+        data["debtPlan"] = {"monthlyEssentials": 1200, "monthlyCushion": 200, "paymentPercent": 65, "strategy": "snowball", "configured": True}
+        data["debts"] = [{"id": "debt-test-1", "type": "prestamo", "amount": 1200, "paid": 0, "currency": "USD", "entity": "Prestamista", "description": "Prueba", "minPayment": 60, "interestRate": 2, "interestPeriod": "mensual", "interestKnown": True}]
         data["expenses"] = [{"id": "1001", "amount": 12.5, "currency": "USD", "category": "comida", "description": "Almuerzo", "method": "efectivo", "bank": "", "date": "2026-10-14T12:00:00Z"}]
         saved = self.json(self.client, "/api/state", "PUT", {"base_data": empty.get_json()["data"], "base_revision": empty.get_json()["revision"], "data": data}, admin_csrf)
         self.assertEqual(saved.status_code, 200, saved.get_json())
+        self.assertEqual(saved.get_json()["data"]["debtPlan"]["strategy"], "snowball")
+        self.assertEqual(saved.get_json()["data"]["debts"][0]["minPayment"], 60)
+        self.assertTrue(saved.get_json()["data"]["debts"][0]["interestKnown"])
 
         new_user = self.json(self.client, "/api/users", "POST", {"username": "memberone", "role": "member"}, admin_csrf)
         self.assertEqual(new_user.status_code, 201, new_user.get_json())

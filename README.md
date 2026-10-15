@@ -96,3 +96,36 @@ python tests/smoke_test.py
 ```
 
 Este script crea una base SQLite temporal y comprueba la configuración inicial, inicio de sesión, contraseña temporal, acceso compartido y que los usuarios normales no puedan borrar gastos ni administrar cuentas.
+
+## Nuevas funciones de ingresos y colegio
+
+- En **Ingresos**, registra sueldo, bono, cestatickets u otro ingreso, con monto por pago, moneda, frecuencia quincenal/mensual/ocasional y días de pago. Los ingresos recurrentes quincenales se estiman como dos pagos al mes para el resumen.
+- En **Colegio**, registra compromisos por estudiante, concepto, monto, fecha de vencimiento y notas. Registra pagos parciales o totales con fecha, método y referencia; la pantalla calcula el saldo pendiente y conserva el historial.
+- Los datos nuevos se guardan en el mismo estado compartido de PostgreSQL que gastos y deudas, por lo que se comparten entre laptop y Pixel cuando el despliegue actualizado está activo.
+- Los pagos escolares también se reflejan como movimientos de gasto para que afecten el cálculo de disponible. No registres el mismo pago manualmente en Gastos, porque se duplicaría.
+
+Tras desplegar, recarga la web para actualizar la PWA. Verifica con un gasto de prueba y elimínalo después, y confirma que se vea en ambos dispositivos antes de cargar datos reales.
+
+
+## Plan de pagos de deudas sin ahogar el presupuesto
+
+- En **Deudas** aparece **Pagar deudas sin ahogarte**. Configura gastos esenciales mensuales, reserva/colchón y el porcentaje del excedente que quieres destinar a deuda (30–85%; valor inicial 60%). No se recomienda dedicar automáticamente todo el ingreso a las deudas.
+- Completa para cada deuda activa su cuota mínima/obligatoria mensual y, si la conoces, la tasa por período (mensual o semanal). El botón **Condiciones** permite actualizar esos datos incluso en deudas ya registradas.
+- El simulador primero separa ingreso recurrente, gastos esenciales y reserva; compara las cuotas mínimas con la capacidad protegida; y solo calcula plazo y distribución si se han capturado las cuotas mínimas de todas las deudas activas y caben dentro del presupuesto.
+- Estrategia **avalancha** prioriza la tasa conocida más alta; **bola de nieve** prioriza el saldo más pequeño. La proyección puede ser optimista para deudas cuya tasa no se conoce, ya que no inventa intereses. No incluye comisiones, mora, tasas variables ni penalidades y no sustituye negociar con acreedores o recibir asesoría financiera.
+- El plan se guarda en el mismo estado JSON de PostgreSQL, sin añadir tablas ni eliminar datos existentes. Después de publicar, recarga con `Cmd + Shift + R` en Mac y cierra/reabre la PWA en el Pixel.
+
+Pruebas adicionales del simulador (requiere Node.js):
+
+```bash
+node tests/debt_plan_test.js
+```
+
+
+## Actualización: pagos y planificación de deudas
+
+- En tarjetas de crédito, el formulario de abono permite seleccionar monto mínimo, saldo total restante o monto personalizado.
+- Para deudas distintas de tarjeta se puede registrar un pago realizado o planificarlo para primera/segunda quincena o una fecha específica. Los pagos planificados se guardan separados y no se descuentan del saldo hasta registrar el pago real.
+- Los pagos reales continúan afectando el saldo de la deuda y se reflejan como gastos.
+- La fecha de corte y fecha límite de pago son recordatorios ingresados por el usuario; esta versión no consulta el banco ni puede detectar automáticamente un pago bancario. Después de registrar un pago mínimo, revisa el estado de cuenta y actualiza el saldo total manualmente.
+- Antes de usar con dinero real, probar con datos ficticios y revisar la pantalla de planificación, en especial las fechas de quincena y la disponibilidad mensual. La programación se registra, pero aún no se crea una agenda automática de vencimientos con notificaciones.

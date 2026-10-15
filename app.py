@@ -55,10 +55,14 @@ limiter = Limiter(get_remote_address, app=app, default_limits=[], storage_uri=os
 DEFAULT_SHARED_DATA = {
     "currency": "USD",
     "exchangeRate": 40.0,
-    "income": {"amount": 0, "currency": "USD"},
+    "income": {"amount": 0, "currency": "USD"},  # compatibilidad con la versión anterior
+    "incomeSources": [],  # sueldo, bono, cestatickets y otros ingresos programados
     "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0},
     "expenses": [],
     "debts": [],
+    "schoolExpenses": [],  # compromisos/cargos del colegio
+    "schoolPayments": [],  # pagos parciales o totales de esos compromisos
+    "debtPlan": {"monthlyEssentials": 0.0, "monthlyCushion": 0.0, "paymentPercent": 60, "strategy": "avalanche", "configured": False},
 }
 
 
@@ -176,6 +180,29 @@ def normalize_shared_data(value) -> dict:
     if not math.isfinite(income_amount):
         income_amount = 0
     result["income"] = {"amount": max(0, min(income_amount, 1_000_000_000_000)), "currency": "BS" if income.get("currency") in ("BS", "VES") else "USD"}
+
+    # Parámetros del planificador de deuda: importes mensuales expresados en USD.
+    raw_plan = value.get("debtPlan") if isinstance(value.get("debtPlan"), dict) else {}
+    def safe_plan_amount(name: str) -> float:
+        try:
+            amount = float(raw_plan.get(name, 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            amount = 0.0
+        if not math.isfinite(amount):
+            amount = 0.0
+        return max(0.0, min(amount, 1_000_000_000_000))
+    try:
+        payment_percent = int(float(raw_plan.get("paymentPercent", 60)))
+    except (TypeError, ValueError, OverflowError):
+        payment_percent = 60
+    result["debtPlan"] = {
+        "monthlyEssentials": safe_plan_amount("monthlyEssentials"),
+        "monthlyCushion": safe_plan_amount("monthlyCushion"),
+        "paymentPercent": max(30, min(payment_percent, 85)),
+        "strategy": raw_plan.get("strategy") if raw_plan.get("strategy") in {"avalanche", "snowball"} else "avalanche",
+        "configured": raw_plan.get("configured", False) is True,
+    }
+
     budgets = value.get("budgets") if isinstance(value.get("budgets"), dict) else {}
     for key in result["budgets"]:
         try:
@@ -195,7 +222,7 @@ def normalize_shared_data(value) -> dict:
             # Keep the existing app's record fields, but discard nested values / very long payloads.
             clean = {}
             for field, field_value in row.items():
-                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod"}:
+                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod", "interestKnown"}:
                     continue
                 if isinstance(field_value, (str, int, float, bool)) or field_value is None:
                     if isinstance(field_value, str):
@@ -243,11 +270,138 @@ def normalize_shared_data(value) -> dict:
                 if not math.isfinite(clean["interestRate"]):
                     clean["interestRate"] = 0.0
                 clean["interestPeriod"] = row.get("interestPeriod") if row.get("interestPeriod") in {"mensual", "semanal"} else "mensual"
+                clean["interestKnown"] = bool(row.get("interestKnown", float(clean["interestRate"] or 0) > 0))
                 clean["cutDate"] = str(row.get("cutDate") or "")[:20]
                 clean["payBefore"] = str(row.get("payBefore") or "")[:40]
             clean_rows.append(clean)
         result[key] = clean_rows
+
+    # Fuentes de ingresos: el monto es el importe por cada pago, no el total mensual.
+    raw_sources = value.get("incomeSources", [])
+    if not isinstance(raw_sources, list) or len(raw_sources) > 500:
+        raise ValueError("La colección incomeSources no es válida.")
+    clean_sources = []
+    for row in raw_sources:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        item_id = str(row.get("id"))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", item_id):
+            continue
+        try:
+            amount = float(row.get("amount", 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
+            continue
+        kind = row.get("kind") if row.get("kind") in {"sueldo", "bono", "cestatickets", "otro"} else "otro"
+        frequency = row.get("frequency") if row.get("frequency") in {"quincenal", "mensual", "ocasional"} else "quincenal"
+        raw_days = row.get("payDays", [])
+        if not isinstance(raw_days, list):
+            raw_days = []
+        days = []
+        for day in raw_days[:2]:
+            try:
+                n = int(day)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if 1 <= n <= 31 and n not in days:
+                days.append(n)
+        days.sort()
+        if frequency == "quincenal" and len(days) != 2:
+            days = [15, 30]
+        elif frequency == "mensual" and len(days) < 1:
+            days = [30]
+        elif frequency == "mensual":
+            days = days[:1]
+        else:  # ingreso ocasional: no se presume un importe mensual recurrente
+            days = []
+        clean_sources.append({
+            "id": item_id, "kind": kind,
+            "name": str(row.get("name") or "")[:120],
+            "amount": amount,
+            "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
+            "frequency": frequency, "payDays": days,
+        })
+    result["incomeSources"] = clean_sources
+
+    # Gastos/compromisos escolares. Los pagos quedan en una colección separada
+    # para conservar el historial de abonos sin modificar el compromiso original.
+    raw_school = value.get("schoolExpenses", [])
+    if not isinstance(raw_school, list) or len(raw_school) > 10000:
+        raise ValueError("La colección schoolExpenses no es válida.")
+    school_rows = []
+    school_concepts = {"mensualidad", "matricula", "utiles", "uniforme", "transporte", "comedor", "actividad", "otro"}
+    for row in raw_school:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        item_id = str(row.get("id"))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", item_id):
+            continue
+        try:
+            amount = float(row.get("amount", 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
+            continue
+        concept = row.get("concept") if row.get("concept") in school_concepts else "otro"
+        school_rows.append({
+            "id": item_id,
+            "student": str(row.get("student") or "")[:120],
+            "concept": concept,
+            "description": str(row.get("description") or "Gasto escolar")[:250],
+            "amount": amount,
+            "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
+            "date": str(row.get("date") or "")[:40],
+            "dueDate": str(row.get("dueDate") or "")[:40],
+            "notes": str(row.get("notes") or "")[:500],
+        })
+    result["schoolExpenses"] = school_rows
+
+    raw_payments = value.get("schoolPayments", [])
+    if not isinstance(raw_payments, list) or len(raw_payments) > 20000:
+        raise ValueError("La colección schoolPayments no es válida.")
+    payment_rows = []
+    valid_methods = {"banco", "efectivo", "pago_movil", "tarjeta"}
+    for row in raw_payments:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        item_id = str(row.get("id"))
+        expense_id = str(row.get("expenseId") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", item_id) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", expense_id):
+            continue
+        try:
+            amount = float(row.get("amount", 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
+            continue
+        payment_rows.append({
+            "id": item_id, "expenseId": expense_id, "amount": amount,
+            "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
+            "date": str(row.get("date") or "")[:40],
+            "method": row.get("method") if row.get("method") in valid_methods else "banco",
+            "reference": str(row.get("reference") or "")[:120],
+            "notes": str(row.get("notes") or "")[:250],
+        })
+    result["schoolPayments"] = payment_rows
     return result
+
+
+def validate_school_balances(data: dict) -> str | None:
+    expenses = {str(item["id"]): item for item in data.get("schoolExpenses", [])}
+    paid_by_expense = {}
+    for payment in data.get("schoolPayments", []):
+        expense = expenses.get(str(payment.get("expenseId")))
+        if expense is None:
+            return "Hay un pago escolar asociado a un gasto que no existe. Actualiza los datos e inténtalo de nuevo."
+        if payment.get("currency") != expense.get("currency"):
+            return "La moneda del pago debe coincidir con la moneda del gasto escolar."
+        key = str(payment["expenseId"])
+        paid_by_expense[key] = paid_by_expense.get(key, 0.0) + float(payment.get("amount", 0))
+    for expense_id, total_paid in paid_by_expense.items():
+        if total_paid > float(expenses[expense_id]["amount"]) + 0.01:
+            return "El total de pagos supera el monto registrado para uno de los gastos escolares. Revisa el saldo antes de guardar."
+    return None
 
 
 def same(a, b) -> bool:
@@ -292,7 +446,7 @@ def three_way_merge(base_data, incoming_data, current_data):
                 conflicts.append(key)
             else:
                 merged[key] = incoming[key]
-    for key in ("expenses", "debts"):
+    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments"):
         merged[key], row_conflicts = merge_array(base[key], incoming[key], current[key])
         if row_conflicts:
             conflicts.extend([f"{key}:{x}" for x in row_conflicts])
@@ -511,10 +665,26 @@ def put_state():
                         if not matching_payment:
                             db.session.rollback()
                             return jsonify(error="Para registrar un abono, guarda al mismo tiempo el movimiento de pago correspondiente."), 403
+        # Un usuario autorizado puede registrar gastos/pagos escolares nuevos, pero no
+        # alterar o eliminar registros ya existentes. El administrador sí puede hacerlo.
+        for collection in ("schoolExpenses", "schoolPayments"):
+            current_rows = {str(item.get("id")): item for item in current.get(collection, []) if item.get("id") is not None}
+            merged_rows = {str(item.get("id")): item for item in merged.get(collection, []) if item.get("id") is not None}
+            if set(current_rows) - set(merged_rows):
+                db.session.rollback()
+                return jsonify(error="Solo el administrador puede eliminar registros escolares o sus pagos."), 403
+            for item_id, stored in current_rows.items():
+                if merged_rows.get(item_id) != stored:
+                    db.session.rollback()
+                    return jsonify(error="Los registros escolares y sus pagos no se pueden modificar después de guardarse; registra un nuevo movimiento o solicita al administrador que lo corrija."), 403
     if conflicts:
         db.session.rollback()
         latest = ensure_shared_state()
         return jsonify(error="Otra persona modificó los mismos datos. Se cargó la versión más reciente; revisa y vuelve a aplicar tu cambio.", conflicts=conflicts, data=normalize_shared_data(latest.data), revision=latest.revision), 409
+    school_error = validate_school_balances(merged)
+    if school_error:
+        db.session.rollback()
+        return jsonify(error=school_error), 400
     record.data = merged
     record.revision += 1
     record.updated_at = datetime.now(timezone.utc)
@@ -538,12 +708,18 @@ def import_legacy_state():
         db.session.add(record)
         db.session.flush()
     current = normalize_shared_data(record.data)
+    school_error = validate_school_balances(incoming)
+    if school_error:
+        db.session.rollback()
+        return jsonify(error=school_error), 400
     financially_empty = (
-        not current["expenses"] and not current["debts"] and
+        not current["expenses"] and not current["debts"] and not current["incomeSources"] and
+        not current["schoolExpenses"] and not current["schoolPayments"] and
         float(current["income"].get("amount", 0) or 0) == 0 and
-        all(float(value or 0) == 0 for value in current["budgets"].values())
+        all(float(value or 0) == 0 for value in current["budgets"].values()) and
+        not current["debtPlan"].get("configured", False)
     )
-    incoming_has_data = bool(incoming["expenses"] or incoming["debts"] or float(incoming["income"].get("amount", 0) or 0) or any(float(v or 0) for v in incoming["budgets"].values()))
+    incoming_has_data = bool(incoming["expenses"] or incoming["debts"] or incoming["incomeSources"] or incoming["schoolExpenses"] or incoming["schoolPayments"] or float(incoming["income"].get("amount", 0) or 0) or any(float(v or 0) for v in incoming["budgets"].values()) or incoming["debtPlan"].get("configured", False))
     if not financially_empty:
         db.session.rollback()
         return jsonify(error="La nube ya contiene información. Por seguridad, la importación de un respaldo antiguo solo se permite cuando ingresos, presupuestos, gastos y deudas están vacíos."), 409

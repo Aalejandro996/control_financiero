@@ -34,9 +34,14 @@
             exchangeRate: 40.00, // Tasa de respaldo
             
             income: { amount: 0, currency: 'USD' },
+            incomeSources: [],
+            schoolExpenses: [],
+            schoolPayments: [],
+            debtPlan: { monthlyEssentials: 0, monthlyCushion: 0, paymentPercent: 60, strategy: 'avalanche', configured: false },
             budgets: { transporte: 0, comida: 0, fijo: 0, hormiga: 0 },
             expenses: [],
             debts: [],
+            plannedDebtPayments: [],
             
             modals: { active: null, data: null }
         };
@@ -80,6 +85,10 @@
             currency: window.state.currency,
             exchangeRate: window.state.exchangeRate,
             income: window.state.income,
+            incomeSources: window.state.incomeSources || [],
+            schoolExpenses: window.state.schoolExpenses || [],
+            schoolPayments: window.state.schoolPayments || [],
+            debtPlan: window.state.debtPlan || { monthlyEssentials: 0, monthlyCushion: 0, paymentPercent: 60, strategy: 'avalanche', configured: false },
             budgets: window.state.budgets,
             expenses: window.state.expenses,
             debts: window.state.debts
@@ -146,10 +155,10 @@
                 const mergedView = JSON.parse(JSON.stringify(result.data));
                 // Preserve edits made while the request was in flight, without discarding
                 // rows concurrently added on the other device.
-                for (const key of ['currency', 'exchangeRate', 'income', 'budgets']) {
+                for (const key of ['currency', 'exchangeRate', 'income', 'budgets', 'debtPlan']) {
                     if (JSON.stringify(latestLocal[key]) !== JSON.stringify(sentData[key])) mergedView[key] = latestLocal[key];
                 }
-                for (const key of ['expenses', 'debts']) {
+                for (const key of ['expenses', 'debts', 'incomeSources', 'schoolExpenses', 'schoolPayments']) {
                     const baseRows = new Map((sentData[key] || []).map(row => [String(row.id), row]));
                     const localRows = new Map((latestLocal[key] || []).map(row => [String(row.id), row]));
                     const remoteRows = new Map((result.data[key] || []).map(row => [String(row.id), row]));
@@ -256,7 +265,12 @@
 
         // --- LOGIC FUNCTIONS ---
         window.getTotals = () => {
-            const incomeUSD = window.convertToUSD(window.state.income.amount, window.state.income.currency);
+            const sources = window.state.incomeSources || [];
+            const recurringIncomeUSD = sources.reduce((sum, row) => {
+                const amount = window.convertToUSD(Number(row.amount) || 0, row.currency);
+                return sum + (row.frequency === 'quincenal' ? amount * 2 : row.frequency === 'mensual' ? amount : 0);
+            }, 0);
+            const incomeUSD = sources.length ? recurringIncomeUSD : window.convertToUSD(window.state.income.amount, window.state.income.currency);
             
             // Gastos de ESTE MES
             const now = new Date();
@@ -331,6 +345,7 @@
             if (!hasData) { window.legacyLocalState = null; return; }
             const cloudIsEmpty = window.cloudRevision === 0 &&
                 (!window.cloudSnapshot?.expenses?.length) && (!window.cloudSnapshot?.debts?.length) &&
+                !window.cloudSnapshot?.debtPlan?.configured &&
                 Number(window.cloudSnapshot?.income?.amount || 0) === 0 &&
                 Object.values(window.cloudSnapshot?.budgets || {}).every(value => Number(value || 0) === 0);
             if (!cloudIsEmpty || window.authUser?.role !== 'admin') {
@@ -589,6 +604,8 @@
                         ${window.state.view === 'dashboard' ? renderDashboard() : ''}
                         ${window.state.view === 'expenses' ? renderExpenses() : ''}
                         ${window.state.view === 'debts' ? renderDebts() : ''}
+                        ${window.state.view === 'school' ? renderSchool() : ''}
+                        ${window.state.view === 'income' ? renderIncome() : ''}
                     </main>
 
                     <!-- Bottom Navigation -->
@@ -602,8 +619,13 @@
                             <span class="text-[10px] font-medium">Gastos</span>
                         </button>
                         <button onclick="window.setView('debts')" class="${window.state.view === 'debts' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
-                            <i class="fas fa-credit-card text-xl"></i>
-                            <span class="text-[10px] font-medium">Deudas</span>
+                            <i class="fas fa-credit-card text-xl"></i><span class="text-[10px] font-medium">Deudas</span>
+                        </button>
+                        <button onclick="window.setView('school')" class="${window.state.view === 'school' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-school text-xl"></i><span class="text-[10px] font-medium">Colegio</span>
+                        </button>
+                        <button onclick="window.setView('income')" class="${window.state.view === 'income' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-wallet text-xl"></i><span class="text-[10px] font-medium">Ingresos</span>
                         </button>
                     </nav>
                 </div>
@@ -776,8 +798,142 @@
             </div>
         `;
 
+        window.monthlyRecurringIncomeUSD = () => {
+            const sources = window.state.incomeSources || [];
+            if (!sources.length) return window.convertToUSD(Number(window.state.income?.amount) || 0, window.state.income?.currency || 'USD');
+            return sources.reduce((sum, row) => {
+                const amount = window.convertToUSD(Number(row.amount) || 0, row.currency);
+                return sum + (row.frequency === 'quincenal' ? amount * 2 : row.frequency === 'mensual' ? amount : 0);
+            }, 0);
+        };
+
+        window.calculateDebtPlan = () => {
+            const settings = window.state.debtPlan || {};
+            const income = window.monthlyRecurringIncomeUSD();
+            const essentials = Math.max(0, Number(settings.monthlyEssentials) || 0);
+            const cushion = Math.max(0, Number(settings.monthlyCushion) || 0);
+            const safeCapacity = Math.max(0, income - essentials - cushion);
+            const paymentPercent = Math.max(30, Math.min(85, Number(settings.paymentPercent) || 60));
+            const debts = (window.state.debts || []).map(debt => {
+                const balance = Math.max(0, window.convertToUSD(Number(debt.amount) - Number(debt.paid || 0), debt.currency));
+                const minimum = Math.min(balance, Math.max(0, window.convertToUSD(Number(debt.minPayment) || 0, debt.currency)));
+                const known = debt.interestKnown === true || (debt.interestKnown === undefined && Number(debt.interestRate) > 0);
+                const rawRate = known ? Math.max(0, Number(debt.interestRate) || 0) / 100 : 0;
+                const monthlyRate = !known ? 0 : (debt.interestPeriod === 'semanal' ? Math.pow(1 + rawRate, 52 / 12) - 1 : rawRate);
+                return { ...debt, balance, minimum, monthlyRate, knownRate: known };
+            }).filter(debt => debt.balance > 0.005);
+            const missingMinimums = debts.filter(debt => debt.minimum <= 0.005);
+            const missingRates = debts.filter(debt => !debt.knownRate);
+            const minimumTotal = debts.reduce((sum, debt) => sum + debt.minimum, 0);
+            const recommended = Math.min(safeCapacity, Math.max(minimumTotal, safeCapacity * paymentPercent / 100));
+            const plan = {
+                configured: settings.configured === true,
+                income, essentials, cushion, safeCapacity, paymentPercent, debts,
+                totalDebt: debts.reduce((sum, debt) => sum + debt.balance, 0),
+                minimumTotal, missingMinimums, missingRates,
+                recommendedPayment: recommended,
+                flexibleAfterPayment: Math.max(0, safeCapacity - recommended),
+                minimumsExceedCapacity: minimumTotal > safeCapacity + 0.01,
+                projections: null,
+                strategy: settings.strategy === 'snowball' ? 'snowball' : 'avalanche'
+            };
+            if (!plan.configured || !debts.length || missingMinimums.length || plan.minimumsExceedCapacity) return plan;
+
+            let balances = debts.map(debt => ({ ...debt, balance: debt.balance }));
+            let cumulativeInterest = 0;
+            let cumulativePayments = 0;
+            let months = 0;
+            let firstMonthPayments = [];
+            const prioritySort = (a, b) => plan.strategy === 'snowball'
+                ? a.balance - b.balance
+                : ((b.knownRate ? b.monthlyRate : -1) - (a.knownRate ? a.monthlyRate : -1)) || (a.balance - b.balance);
+
+            while (balances.some(debt => debt.balance > 0.02) && months < 600) {
+                months += 1;
+                let interestThisMonth = 0;
+                for (const debt of balances) {
+                    const interest = debt.balance * debt.monthlyRate;
+                    debt.balance += interest;
+                    interestThisMonth += interest;
+                    debt.paidThisMonth = 0;
+                }
+                cumulativeInterest += interestThisMonth;
+                let budget = recommended;
+                // Primero cubre mínimos para evitar que el cálculo priorice una deuda dejando otra sin cuota.
+                for (const debt of balances) {
+                    if (debt.balance <= 0.02 || debt.minimum <= 0) continue;
+                    const payment = Math.min(debt.minimum, debt.balance, budget);
+                    debt.balance -= payment; debt.paidThisMonth += payment; budget -= payment;
+                    if (budget <= 0.005) break;
+                }
+                // El dinero restante se aplica según avalancha o bola de nieve.
+                const sorted = balances.filter(debt => debt.balance > 0.02).sort(prioritySort);
+                for (const debt of sorted) {
+                    if (budget <= 0.005) break;
+                    const payment = Math.min(debt.balance, budget);
+                    debt.balance -= payment; debt.paidThisMonth += payment; budget -= payment;
+                }
+                const actual = balances.reduce((sum, debt) => sum + debt.paidThisMonth, 0);
+                cumulativePayments += actual;
+                if (months === 1) firstMonthPayments = balances.map(debt => ({ id: debt.id, entity: debt.entity, description: debt.description, currency: debt.currency, paymentUSD: debt.paidThisMonth, remainingUSD: debt.balance }));
+                if (actual <= 0.005) break;
+                // Si los intereses siguen creciendo por encima de la capacidad, evitamos una falsa promesa de liquidación.
+                if (months > 12 && actual <= interestThisMonth + 0.005 && balances.some(debt => debt.balance > 0.02)) {
+                    const progress = balances.reduce((sum, debt) => sum + debt.balance, 0);
+                    if (progress >= plan.totalDebt) break;
+                }
+            }
+            plan.projections = {
+                months: balances.some(debt => debt.balance > 0.02) ? null : months,
+                exceededHorizon: balances.some(debt => debt.balance > 0.02) && months >= 600,
+                remainingAfterHorizon: balances.reduce((sum, debt) => sum + Math.max(0, debt.balance), 0),
+                estimatedInterest: cumulativeInterest,
+                estimatedTotalPaid: cumulativePayments,
+                firstMonthPayments
+            };
+            return plan;
+        };
+
+        const renderDebtPlan = () => {
+            const calc = window.calculateDebtPlan();
+            const noDebts = calc.debts.length === 0;
+            const configButton = `<button onclick="window.openModal('debtPlanSettings')" class="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700"><i class="fas fa-sliders-h mr-1"></i> Configurar capacidad</button>`;
+            const estimate = calc.projections;
+            let status = '';
+            if (!calc.configured) {
+                status = `<div class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">Configura tus gastos esenciales y el dinero que quieres reservar. El plan no utilizará automáticamente todo tu ingreso para pagar deuda.</div>`;
+            } else if (calc.income <= 0) {
+                status = `<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Registra primero tus ingresos mensuales recurrentes para calcular una capacidad de pago realista.</div>`;
+            } else if (calc.minimumsExceedCapacity) {
+                status = `<div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><strong>Las cuotas mínimas superan tu capacidad protegida.</strong><p class="mt-1">Mínimos registrados: ${window.getDisplayAmount(calc.minimumTotal)} al mes. Capacidad disponible: ${window.getDisplayAmount(calc.safeCapacity)}. No sería realista prometer una salida pagando esos mínimos sin exceder el presupuesto. Contacta a los acreedores antes de vencer para solicitar alternativas, reestructuración o un plan temporal; no sacrifiques vivienda, comida, servicios ni colegio para forzar el cálculo.</p></div>`;
+            } else if (calc.missingMinimums.length) {
+                status = `<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Faltan cuotas mínimas mensuales.</strong> Para calcular una distribución que no deje una deuda sin cubrir, completa el pago mínimo/cuota obligatoria de cada deuda activa mediante el botón “Condiciones” de cada una.</div>`;
+            } else if (calc.safeCapacity <= 0) {
+                status = `<div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">Tus ingresos estimados ya están comprometidos con gastos esenciales y reserva. No aparece una capacidad segura adicional para deudas; revisa los montos configurados y habla con tus acreedores sobre opciones asequibles.</div>`;
+            } else if (estimate?.months !== null && estimate?.months !== undefined) {
+                status = `<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><strong>Estimación orientativa: ${estimate.months} ${estimate.months === 1 ? 'mes' : 'meses'}.</strong><p class="mt-1">Pago total para deudas al mes: ${window.getDisplayAmount(calc.recommendedPayment)}. Intereses estimados según las tasas que registraste: ${window.getDisplayAmount(estimate.estimatedInterest)}. Estrategia: ${calc.strategy === 'avalanche' ? 'avalancha (mayor tasa primero)' : 'bola de nieve (menor saldo primero)'}.</p>${calc.missingRates.length ? `<p class="mt-1 font-semibold">Ojo: ${calc.missingRates.length} deuda(s) no tienen tasa confirmada. El plazo y los intereses son optimistas para esas deudas porque la simulación las calcula temporalmente sin intereses.</p>` : ''}</div>`;
+            } else if (estimate?.exceededHorizon) {
+                status = `<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Con este presupuesto, la simulación no logra liquidar todas las deudas dentro de 50 años. Saldo estimado al final: ${window.getDisplayAmount(estimate.remainingAfterHorizon)}. Revisa las tasas, mínimos y la posibilidad de negociar condiciones con tus acreedores.</div>`;
+            }
+            const details = calc.configured && calc.income > 0 ? `<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div class="rounded-xl bg-slate-50 p-3"><p class="text-xs text-slate-500">Ingreso recurrente</p><b>${window.getDisplayAmount(calc.income)}</b></div>
+                <div class="rounded-xl bg-slate-50 p-3"><p class="text-xs text-slate-500">Básicos + reserva</p><b>${window.getDisplayAmount(calc.essentials + calc.cushion)}</b></div>
+                <div class="rounded-xl bg-slate-50 p-3"><p class="text-xs text-slate-500">Deudas activas</p><b>${window.getDisplayAmount(calc.totalDebt)}</b></div>
+                <div class="rounded-xl bg-blue-50 p-3"><p class="text-xs text-blue-700">Pago recomendado</p><b>${window.getDisplayAmount(calc.recommendedPayment)}</b><p class="text-xs text-blue-700 mt-1">${calc.paymentPercent}% del excedente disponible, respetando los mínimos si caben</p></div>
+              </div>` : '';
+            const firstMonth = estimate?.firstMonthPayments?.length ? `<div class="mt-4"><h4 class="font-bold mb-2">Distribución estimada del primer mes</h4><div class="space-y-2">${estimate.firstMonthPayments.map(row => `<div class="flex justify-between gap-3 rounded-lg bg-slate-50 p-3 text-sm"><span>${window.escapeHTML(row.entity)} · ${window.escapeHTML(row.description)}</span><strong>${window.getDisplayAmount(row.paymentUSD)}</strong></div>`).join('')}</div><p class="text-xs text-gray-500 mt-2">Son cifras estimadas; registra los pagos reales en cada deuda para mantener actualizado el saldo.</p></div>` : '';
+            return `<section class="bg-white rounded-2xl p-5 mb-5 border border-blue-100 shadow-sm space-y-4">
+                <div class="flex flex-wrap items-start justify-between gap-3"><div><p class="text-xs uppercase tracking-wide font-bold text-blue-700">Plan de pagos</p><h3 class="text-lg font-bold text-gray-900">Pagar deudas sin ahogarte</h3><p class="text-sm text-gray-600 mt-1">Protege primero tus gastos esenciales y reserva; calcula después lo que cabe en el presupuesto.</p></div>${configButton}</div>
+                ${details}${status}
+                ${noDebts ? '<p class="text-sm text-gray-500">Registra tus deudas para obtener una proyección.</p>' : ''}
+                ${firstMonth}
+                <p class="text-xs text-gray-500">La proyección supone pagos mensuales constantes y no incluye comisiones, mora, tasas variables ni cambios futuros del ingreso. No es una oferta del acreedor ni una garantía de liquidación.</p>
+            </section>`;
+        };
+
         const renderDebts = () => `
             <div class="fade-in max-w-4xl mx-auto">
+                ${renderDebtPlan()}
                 <div class="flex justify-between items-center mb-6">
                     <h2 class="text-2xl font-bold text-gray-800">Control de Deudas</h2>
                     <button onclick="window.openModal('addDebt')" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-transform active:scale-95">
@@ -821,7 +977,7 @@
 
                             <div class="bg-gray-50 rounded-xl p-3 mb-4 grid grid-cols-2 gap-2 text-xs">
                                 ${debt.type === 'tdc' ? `
-                                    <div><span class="text-gray-500 block">Pago Mínimo:</span> <span class="font-semibold">${window.getDisplayAmount(window.convertToUSD(debt.minPayment, debt.currency))}</span></div>
+                                    <div><span class="text-gray-500 block">Pago Mínimo:</span> <span class="font-semibold">${Number(debt.minPayment || 0) > 0 ? window.getDisplayAmount(window.convertToUSD(debt.minPayment, debt.currency)) : 'Por configurar'}</span></div>
                                     <div><span class="text-gray-500 block">Fecha Corte:</span> <span class="font-semibold">${window.escapeHTML(debt.cutDate)}</span></div>
                                     <div><span class="text-gray-500 block">Pagar antes de:</span> <span class="font-semibold">${window.escapeHTML(debt.payBefore)}</span></div>
                                 ` : debt.type === 'cashea' ? `
@@ -831,6 +987,8 @@
                                     <div><span class="text-gray-500 block">Interés:</span> <span class="font-semibold">${debt.interestRate}% ${window.escapeHTML(debt.interestPeriod)}</span></div>
                                 `}
                                 <div><span class="text-gray-500 block">Monto Original:</span> <span class="font-semibold">${window.formatMoney(debt.amount, debt.currency)}</span></div>
+                                <div><span class="text-gray-500 block">Cuota mínima mensual:</span> <span class="font-semibold">${Number(debt.minPayment || 0) > 0 ? window.formatMoney(debt.minPayment, debt.currency) : 'Por configurar'}</span></div>
+                                <div><span class="text-gray-500 block">Tasa para proyección:</span> <span class="font-semibold">${debt.interestKnown || Number(debt.interestRate || 0) > 0 ? `${Number(debt.interestRate || 0)}% ${window.escapeHTML(debt.interestPeriod || 'mensual')}` : 'No confirmada'}</span></div>
                             </div>
 
                             <div class="flex items-center gap-3">
@@ -845,6 +1003,7 @@
                                     ${window.state.role === 'supervisor' ? `
                                         <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-3 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
                                     ` : ''}
+                                    <button onclick="window.openModal('editDebtTerms', '${debt.id}')" class="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-2 rounded-lg text-sm font-bold transition-colors">Condiciones</button>
                                     <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
                                         <i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar
                                     </button>
@@ -868,11 +1027,10 @@
                     typeSelect.addEventListener('change', (e) => {
                         document.getElementById('tdcFields').classList.add('hidden');
                         document.getElementById('casheaFields').classList.add('hidden');
-                        document.getElementById('loanFields').classList.add('hidden');
-                        
                         if (e.target.value === 'tdc') document.getElementById('tdcFields').classList.remove('hidden');
+                        if (e.target.value !== 'tdc') document.getElementById('tdcFields').classList.add('hidden');
                         if (e.target.value === 'cashea') document.getElementById('casheaFields').classList.remove('hidden');
-                        if (e.target.value === 'prestamo') document.getElementById('loanFields').classList.remove('hidden');
+                        if (e.target.value !== 'cashea') document.getElementById('casheaFields').classList.add('hidden');
                     });
                 }
             }, 100);
@@ -882,6 +1040,39 @@
             window.state.modals.active = null;
             window.state.modals.data = null;
             window.updateUI();
+        };
+
+
+        const renderIncome = () => {
+            const rows = window.state.incomeSources || [];
+            const labels = {sueldo:'Sueldo', bono:'Bono', cestatickets:'Cestatickets', otro:'Otro'};
+            const monthlyUSD = rows.reduce((sum,r) => {
+                const amount = window.convertToUSD(Number(r.amount)||0, r.currency);
+                return sum + (r.frequency === 'quincenal' ? amount*2 : r.frequency === 'mensual' ? amount : 0);
+            }, 0);
+            return `<div class="max-w-4xl mx-auto space-y-4 fade-in">
+              <div class="bg-white rounded-2xl p-5 border shadow-sm">
+                <div class="flex justify-between items-center gap-3"><div><h2 class="text-xl font-bold">Ingresos y calendario de pagos</h2><p class="text-sm text-gray-500">Registra cada fuente y cuánto recibes por pago.</p></div>
+                <button onclick="window.openModal('addIncomeSource')" class="bg-blue-600 text-white rounded-xl px-4 py-2 font-bold">+ Ingreso</button></div>
+                <div class="mt-4 grid grid-cols-2 gap-3"><div class="bg-blue-50 p-4 rounded-xl"><p class="text-sm text-blue-700">Ingreso recurrente mensual estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD)}</strong></div>
+                <div class="bg-emerald-50 p-4 rounded-xl"><p class="text-sm text-emerald-700">Disponible estimado</p><strong class="text-xl">${window.getDisplayAmount(monthlyUSD-window.getTotals().expenses)}</strong></div></div>
+              </div>
+              <div class="space-y-3">${rows.length ? rows.map(r=>`<div class="bg-white rounded-xl p-4 border flex justify-between gap-3 items-center"><div><strong>${window.escapeHTML(labels[r.kind]||r.kind)}${r.name?' · '+window.escapeHTML(r.name):''}</strong><p class="text-sm text-gray-500">${r.frequency==='quincenal'?'Días de pago: '+(r.payDays||[]).join(' y '):r.frequency==='mensual'?'Pago mensual día '+(r.payDays||[]).join(''):'Ingreso ocasional'}</p></div><div class="text-right"><strong>${window.formatMoney(r.amount,r.currency)}</strong><p class="text-xs text-gray-500">${r.frequency==='quincenal'?'por quincena':r.frequency==='mensual'?'por mes':'ocasional'}</p></div></div>`).join('') : '<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Todavía no has registrado fuentes de ingreso.</div>'}</div>
+            </div>`;
+        };
+        const renderSchool = () => {
+            const expenses = window.state.schoolExpenses || [], payments = window.state.schoolPayments || [];
+            const paid = id => payments.filter(p=>String(p.expenseId)===String(id)).reduce((n,p)=>n+window.convertToUSD(p.amount,p.currency),0);
+            const concepts = {mensualidad:'Mensualidad',matricula:'Matrícula',utiles:'Útiles',uniforme:'Uniforme',transporte:'Transporte',comedor:'Comedor',actividad:'Actividad',otro:'Otro'};
+            const total = expenses.reduce((n,e)=>n+window.convertToUSD(e.amount,e.currency),0);
+            const paidTotal = expenses.reduce((n,e)=>n+Math.min(window.convertToUSD(e.amount,e.currency),paid(e.id)),0);
+            return `<div class="max-w-4xl mx-auto space-y-4 fade-in">
+              <div class="bg-white rounded-2xl p-5 border shadow-sm"><div class="flex justify-between items-center gap-3"><div><h2 class="text-xl font-bold">Gastos y pagos del colegio</h2><p class="text-sm text-gray-500">Mensualidades, matrícula, útiles, uniformes y otros compromisos.</p></div><button onclick="window.openModal('addSchoolExpense')" class="bg-blue-600 text-white rounded-xl px-4 py-2 font-bold">+ Registrar gasto</button></div>
+                <div class="grid grid-cols-3 gap-2 mt-4"><div class="bg-slate-50 rounded-xl p-3"><p class="text-xs text-gray-500">Compromisos</p><b>${window.getDisplayAmount(total)}</b></div><div class="bg-emerald-50 rounded-xl p-3"><p class="text-xs text-emerald-700">Pagado</p><b>${window.getDisplayAmount(paidTotal)}</b></div><div class="bg-orange-50 rounded-xl p-3"><p class="text-xs text-orange-700">Pendiente</p><b>${window.getDisplayAmount(Math.max(0,total-paidTotal))}</b></div></div>
+              </div>
+              <div class="space-y-3">${expenses.length ? expenses.map(e=>{const remaining=Math.max(0,window.convertToUSD(e.amount,e.currency)-paid(e.id));return `<div class="bg-white rounded-xl border p-4"><div class="flex justify-between gap-3"><div><strong>${window.escapeHTML(e.description)}</strong><p class="text-sm text-gray-500">${window.escapeHTML(e.student||'Estudiante')} · ${concepts[e.concept]||'Otro'} · Vence: ${window.escapeHTML(e.dueDate||'Sin fecha')}</p><p class="text-xs text-gray-400">${window.escapeHTML(e.notes||'')}</p></div><div class="text-right"><b>${window.formatMoney(e.amount,e.currency)}</b><p class="text-sm ${remaining>0?'text-orange-600':'text-emerald-600'}">${remaining>0?'Pendiente '+window.getDisplayAmount(remaining):'Pagado'}</p></div></div>${remaining>0?`<button onclick="window.openModal('paySchoolExpense','${e.id}')" class="mt-3 bg-emerald-100 text-emerald-800 rounded-lg px-3 py-2 text-sm font-bold">Registrar pago / abono</button>`:''}</div>`}).join(''):'<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Aún no hay gastos escolares registrados.</div>'}</div>
+              <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold mb-3">Historial de pagos escolares</h3>${payments.length?payments.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(p=>{const e=expenses.find(x=>String(x.id)===String(p.expenseId));return `<div class="py-2 border-b last:border-0 flex justify-between gap-2 text-sm"><div>${window.escapeHTML(e?.description||'Compromiso escolar')} · ${window.escapeHTML(p.date||'')}<p class="text-xs text-gray-500">${window.escapeHTML(p.method||'')} ${p.reference?'· '+window.escapeHTML(p.reference):''}</p></div><b>${window.formatMoney(p.amount,p.currency)}</b></div>`}).join(''):'<p class="text-sm text-gray-500">Los pagos registrados aparecerán aquí.</p>'}</div>
+            </div>`;
         };
 
         const renderModal = () => {
@@ -975,12 +1166,24 @@
                             <input type="text" name="description" required placeholder="Ej. Zapatos, Emergencia médica..." class="w-full border border-gray-300 rounded-xl p-2.5 outline-none">
                         </div>
 
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="block text-xs font-medium text-gray-600">Cuota mínima obligatoria al mes
+                                <input type="number" min="0" step="0.01" name="minPayment" placeholder="Monto en la moneda de la deuda" class="mt-1 w-full border border-gray-300 rounded-lg p-2 outline-none">
+                            </label>
+                            <label class="block text-xs font-medium text-gray-600">Tasa por período (%)
+                                <input type="number" min="0" max="10000" step="0.01" name="interestRate" value="0" class="mt-1 w-full border border-gray-300 rounded-lg p-2 outline-none">
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="block text-xs font-medium text-gray-600">Período de la tasa
+                                <select name="interestPeriod" class="mt-1 w-full border border-gray-300 rounded-lg p-2 bg-white"><option value="mensual">Mensual</option><option value="semanal">Semanal</option></select>
+                            </label>
+                            <label class="flex items-center gap-2 text-xs text-gray-600 pt-5"><input type="checkbox" name="interestKnown" value="yes" class="rounded"> Conozco la tasa exacta</label>
+                        </div>
+                        <p class="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Introduce la tasa mensual o semanal, tal como la cobra el acreedor. No introduzcas una tasa anual en el campo mensual. Si no la conoces, deja la casilla sin marcar: el plazo estimado no sumará intereses para esa deuda y será optimista.</p>
+
                         <div id="tdcFields" class="bg-purple-50 p-3 rounded-xl border border-purple-100 space-y-3">
                             <p class="text-xs font-bold text-purple-700 mb-2 uppercase"><i class="fas fa-credit-card"></i> Datos Tarjeta de Crédito</p>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 mb-1">Pago Mínimo Esperado</label>
-                                <input type="number" step="0.01" name="minPayment" class="w-full border border-purple-200 rounded-lg p-2 outline-none bg-white">
-                            </div>
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-medium text-gray-600 mb-1">Día de Corte</label>
@@ -1007,22 +1210,6 @@
                             </div>
                         </div>
 
-                        <div id="loanFields" class="bg-red-50 p-3 rounded-xl border border-red-100 space-y-3 hidden">
-                            <p class="text-xs font-bold text-red-700 mb-2 uppercase"><i class="fas fa-percent"></i> Intereses del Préstamo</p>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600 mb-1">Porcentaje (%)</label>
-                                    <input type="number" step="0.1" name="interestRate" placeholder="Ej. 5" class="w-full border border-red-200 rounded-lg p-2 outline-none bg-white">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600 mb-1">Período</label>
-                                    <select name="interestPeriod" class="w-full border border-red-200 rounded-lg p-2 outline-none bg-white">
-                                        <option value="mensual">Mensual</option>
-                                        <option value="semanal">Semanal</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
 
                         <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl mt-4 transition-colors">Registrar Deuda</button>
                     </form>
@@ -1038,11 +1225,32 @@
                     </div>
                     <form onsubmit="window.handleFormSubmit(event, 'payDebt')" class="space-y-4">
                         <input type="hidden" name="debtId" value="${debt.id}">
+                        ${debt.type === 'tdc' ? `
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de pago de tarjeta</label>
+                            <select name="paymentChoice" id="cardPaymentChoice" required onchange="window.updateDebtPaymentAmount('${debt.id}')" class="w-full border border-gray-300 rounded-xl p-3 bg-white">
+                                <option value="minimum">Monto mínimo (${window.formatMoney(Number(debt.minPayment || 0), debt.currency)})</option>
+                                <option value="total">Monto total restante (${window.formatMoney(Math.max(0, Number(debt.amount) - Number(debt.paid || 0)), debt.currency)})</option>
+                                <option value="custom">Monto personalizado</option>
+                            </select>
+                        </div>` : `
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Programar pago</label>
+                            <select name="scheduleType" class="w-full border border-gray-300 rounded-xl p-3 bg-white">
+                                <option value="now">Registrar pago realizado</option>
+                                <option value="quincena1">Planificar para la primera quincena</option>
+                                <option value="quincena2">Planificar para la segunda quincena</option>
+                                <option value="date">Fecha específica</option>
+                            </select>
+                            <label class="block text-xs font-medium text-gray-500 mt-2 mb-1">Fecha específica (si aplica)</label>
+                            <input type="date" name="scheduledDate" class="w-full border border-gray-300 rounded-xl p-2">
+                        </div>`}
                         <div>
                             <label class="block text-xs font-medium text-gray-500 mb-1">Monto a Abonar (${debt.currency})</label>
-                            <input type="number" step="0.01" name="amount" required max="${debt.amount - (debt.paid || 0)}" class="w-full border border-gray-300 rounded-xl p-3 outline-none text-lg font-bold text-green-600">
+                            <input id="debtPaymentAmount" type="number" step="0.01" min="0.01" name="amount" required max="${Math.max(0, Number(debt.amount) - Number(debt.paid || 0))}" value="${debt.type === 'tdc' ? Math.min(Number(debt.minPayment || 0), Math.max(0, Number(debt.amount) - Number(debt.paid || 0))) : ''}" class="w-full border border-gray-300 rounded-xl p-3 outline-none text-lg font-bold text-green-600">
+                            <p class="text-xs text-gray-500 mt-1">Un pago planificado no se registrará como pagado hasta que confirmes el pago real.</p>
                         </div>
-                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl mt-2 transition-colors">Confirmar Pago</button>
+                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl mt-2 transition-colors">Confirmar / Planificar</button>
                     </form>
                 `;
             } else if (window.state.modals.active === 'updateIncome') {
@@ -1115,8 +1323,61 @@
                                 </div>`).join('')}
                         </div>
                     </div>`;
+            } else if (window.state.modals.active === 'addIncomeSource') {
+                title = 'Registrar ingreso';
+                content = `<form onsubmit="window.handleFormSubmit(event,'incomeSource')" class="space-y-3">
+                  <label class="block text-sm">Tipo<select name="kind" class="w-full border rounded-xl p-3"><option value="sueldo">Sueldo</option><option value="bono">Bono</option><option value="cestatickets">Cestatickets</option><option value="otro">Otro</option></select></label>
+                  <label class="block text-sm">Nombre o detalle<input name="name" maxlength="120" placeholder="Ej. primera quincena" class="w-full border rounded-xl p-3"></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Monto por pago<input name="amount" type="number" min="0.01" step="0.01" required class="w-full border rounded-xl p-3"></label><label class="block text-sm">Moneda<select name="currency" class="w-full border rounded-xl p-3"><option value="USD">USD</option><option value="BS">Bs / VES</option></select></label></div>
+                  <label class="block text-sm">Frecuencia<select name="frequency" class="w-full border rounded-xl p-3"><option value="quincenal">Quincenal (dos pagos al mes)</option><option value="mensual">Mensual</option><option value="ocasional">Ocasional / bono único</option></select></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Día de pago 1<input name="day1" type="number" min="1" max="31" value="15" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Día de pago 2<input name="day2" type="number" min="1" max="31" value="30" class="w-full border rounded-xl p-3"></label></div>
+                  <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar ingreso</button></form>`;
+            } else if (window.state.modals.active === 'addSchoolExpense') {
+                title = 'Registrar gasto escolar';
+                content = `<form onsubmit="window.handleFormSubmit(event,'schoolExpense')" class="space-y-3">
+                  <label class="block text-sm">Estudiante<input name="student" maxlength="120" placeholder="Nombre del estudiante" class="w-full border rounded-xl p-3"></label>
+                  <label class="block text-sm">Concepto<select name="concept" class="w-full border rounded-xl p-3"><option value="mensualidad">Mensualidad</option><option value="matricula">Matrícula</option><option value="utiles">Útiles</option><option value="uniforme">Uniforme</option><option value="transporte">Transporte</option><option value="comedor">Comedor</option><option value="actividad">Actividad</option><option value="otro">Otro</option></select></label>
+                  <label class="block text-sm">Descripción<input name="description" maxlength="250" required placeholder="Ej. mensualidad de octubre" class="w-full border rounded-xl p-3"></label>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Monto total<input name="amount" type="number" min="0.01" step="0.01" required class="w-full border rounded-xl p-3"></label><label class="block text-sm">Moneda<select name="currency" class="w-full border rounded-xl p-3"><option value="USD">USD</option><option value="BS">Bs / VES</option></select></label></div>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Fecha del gasto<input name="date" type="date" class="w-full border rounded-xl p-3"></label><label class="block text-sm">Fecha límite<input name="dueDate" type="date" class="w-full border rounded-xl p-3"></label></div>
+                  <label class="block text-sm">Notas<input name="notes" maxlength="500" class="w-full border rounded-xl p-3"></label>
+                  <button class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar compromiso</button></form>`;
+            } else if (window.state.modals.active === 'paySchoolExpense') {
+                const school = (window.state.schoolExpenses||[]).find(x=>String(x.id)===String(window.state.modals.data));
+                if (!school) return '';
+                title = 'Registrar pago escolar';
+                content = `<form onsubmit="window.handleFormSubmit(event,'schoolPayment')" class="space-y-3"><input type="hidden" name="expenseId" value="${school.id}">
+                  <p class="text-sm text-gray-600">${window.escapeHTML(school.description)} · Total ${window.formatMoney(school.amount,school.currency)}</p>
+                  <div class="grid grid-cols-2 gap-3"><label class="block text-sm">Monto abonado<input name="amount" type="number" min="0.01" step="0.01" required class="w-full border rounded-xl p-3"></label><label class="block text-sm">Moneda<select name="currency" class="w-full border rounded-xl p-3"><option value="${school.currency}">${school.currency}</option><option value="${school.currency==='USD'?'BS':'USD'}">${school.currency==='USD'?'BS':'USD'}</option></select></label></div>
+                  <label class="block text-sm">Fecha<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" class="w-full border rounded-xl p-3"></label>
+                  <label class="block text-sm">Método<select name="method" class="w-full border rounded-xl p-3"><option value="banco">Transferencia / banco</option><option value="pago_movil">Pago móvil</option><option value="tarjeta">Tarjeta</option><option value="efectivo">Efectivo</option></select></label>
+                  <label class="block text-sm">Referencia<input name="reference" maxlength="120" class="w-full border rounded-xl p-3"></label>
+                  <label class="block text-sm">Notas<input name="notes" maxlength="250" class="w-full border rounded-xl p-3"></label>
+                  <button class="w-full bg-emerald-600 text-white rounded-xl p-3 font-bold">Guardar pago</button></form>`;
+            } else if (window.state.modals.active === 'debtPlanSettings') {
+                const plan = window.state.debtPlan || {};
+                title = 'Configurar capacidad de pago';
+                content = `<form onsubmit="window.handleFormSubmit(event,'debtPlanSettings')" class="space-y-4">
+                    <p class="text-sm text-gray-600">Usa montos mensuales en USD. Incluye vivienda, comida, transporte, servicios, colegio, salud y otros compromisos esenciales. No incluyas aquí las cuotas de las deudas registradas: el planificador las suma aparte.</p>
+                    <label class="block text-sm">Gastos esenciales mensuales (USD)<input name="monthlyEssentials" type="number" min="0" step="0.01" required value="${Number(plan.monthlyEssentials)||0}" class="mt-1 w-full border rounded-xl p-3"></label>
+                    <label class="block text-sm">Reserva / colchón que no quieres tocar (USD)<input name="monthlyCushion" type="number" min="0" step="0.01" required value="${Number(plan.monthlyCushion)||0}" class="mt-1 w-full border rounded-xl p-3"></label>
+                    <label class="block text-sm">Porcentaje del excedente destinado a deudas: <strong id="debtPercentValue">${Number(plan.paymentPercent)||60}%</strong><input name="paymentPercent" type="range" min="30" max="85" step="5" value="${Number(plan.paymentPercent)||60}" oninput="document.getElementById('debtPercentValue').textContent=this.value+'%'" class="mt-2 w-full"></label>
+                    <p class="text-xs text-gray-500">Por defecto se destina el 60% del excedente protegido a las deudas y se deja el resto como margen flexible. Puedes moverlo de 30% a 85%.</p>
+                    <label class="block text-sm">Estrategia<select name="strategy" class="mt-1 w-full border rounded-xl p-3 bg-white"><option value="avalanche" ${plan.strategy!=='snowball'?'selected':''}>Avalancha: mayor interés primero</option><option value="snowball" ${plan.strategy==='snowball'?'selected':''}>Bola de nieve: saldo menor primero</option></select></label>
+                    <button type="submit" class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar capacidad</button></form>`;
+            } else if (window.state.modals.active === 'editDebtTerms') {
+                const debt = (window.state.debts||[]).find(x=>String(x.id)===String(window.state.modals.data));
+                if (!debt) return '';
+                title = 'Condiciones para el plan de pagos';
+                content = `<form onsubmit="window.handleFormSubmit(event,'editDebtTerms')" class="space-y-4"><input type="hidden" name="debtId" value="${window.escapeHTML(debt.id)}">
+                    <p class="text-sm text-gray-600">${window.escapeHTML(debt.entity)} · ${window.escapeHTML(debt.description)}. Montos de cuotas en ${debt.currency}.</p>
+                    <label class="block text-sm">Cuota mínima/obligatoria mensual<input name="minPayment" type="number" min="0" step="0.01" required value="${Number(debt.minPayment)||0}" class="mt-1 w-full border rounded-xl p-3"></label>
+                    <label class="block text-sm">Tasa por período (%)<input name="interestRate" type="number" min="0" max="10000" step="0.01" value="${Number(debt.interestRate)||0}" class="mt-1 w-full border rounded-xl p-3"></label>
+                    <label class="block text-sm">Período<select name="interestPeriod" class="mt-1 w-full border rounded-xl p-3 bg-white"><option value="mensual" ${debt.interestPeriod!=='semanal'?'selected':''}>Mensual</option><option value="semanal" ${debt.interestPeriod==='semanal'?'selected':''}>Semanal</option></select></label>
+                    <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="interestKnown" value="yes" ${debt.interestKnown || Number(debt.interestRate||0)>0?'checked':''}> Conozco la tasa exacta por período</label>
+                    <p class="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Si no conoces la tasa, no marques la casilla. La proyección excluirá esos intereses y lo avisará.</p>
+                    <button type="submit" class="w-full bg-blue-600 text-white rounded-xl p-3 font-bold">Guardar condiciones</button></form>`;
             }
-
             return `
                 <div class="fixed inset-0 bg-slate-900 bg-opacity-60 z-50 flex items-end md:items-center justify-center fade-in backdrop-blur-sm overflow-y-auto">
                     <div class="bg-white w-full md:w-[450px] rounded-t-3xl md:rounded-3xl p-6 shadow-2xl relative pb-8 md:pb-6 max-h-[90vh] overflow-y-auto">
@@ -1126,6 +1387,17 @@
                     </div>
                 </div>
             `;
+        };
+
+        window.updateDebtPaymentAmount = (debtId) => {
+            const debt = (window.state.debts || []).find(d => d.id === debtId);
+            const choice = document.getElementById('cardPaymentChoice')?.value;
+            const amountInput = document.getElementById('debtPaymentAmount');
+            if (!debt || !amountInput) return;
+            const remaining = Math.max(0, Number(debt.amount || 0) - Number(debt.paid || 0));
+            if (choice === 'minimum') amountInput.value = Math.min(Number(debt.minPayment || 0), remaining).toFixed(2);
+            else if (choice === 'total') amountInput.value = remaining.toFixed(2);
+            else amountInput.value = '';
         };
 
         window.handleFormSubmit = (e, type) => {
@@ -1162,26 +1434,80 @@
                     payBefore: data.payBefore || null,
                     installments: data.installments ? parseInt(data.installments) : null,
                     invoice: data.invoice || null,
-                    interestRate: data.interestRate ? parseFloat(data.interestRate) : null,
-                    interestPeriod: data.interestPeriod || null
+                    interestRate: data.interestRate ? parseFloat(data.interestRate) : 0,
+                    interestPeriod: data.interestPeriod || 'mensual',
+                    interestKnown: data.interestKnown === 'yes'
                 });
             } 
             else if (type === 'payDebt') {
                 const debt = window.state.debts.find(d => d.id === data.debtId);
                 if (debt) {
-                    debt.paid = (debt.paid || 0) + parseFloat(data.amount);
-                    // Registrar como gasto para afectar liquidez
-                    window.state.expenses.unshift({
-                        id: uniqueId + '_payment',
-                        amount: parseFloat(data.amount),
-                        currency: debt.currency,
-                        category: 'fijo',
-                        description: `Abono/Pago Deuda: ${debt.entity}`,
-                        method: 'banco',
-                        date: new Date().toISOString()
-                    });
+                    const isScheduled = debt.type !== 'tdc' && data.scheduleType && data.scheduleType !== 'now';
+                    if (isScheduled) {
+                        window.state.plannedDebtPayments = window.state.plannedDebtPayments || [];
+                        const scheduledDate = data.scheduleType === 'date' ? data.scheduledDate : '';
+                        window.state.plannedDebtPayments.unshift({
+                            id: uniqueId, debtId: debt.id, entity: debt.entity, description: debt.description,
+                            amount: parseFloat(data.amount), currency: debt.currency,
+                            scheduleType: data.scheduleType, scheduledDate,
+                            status: 'planned', createdAt: new Date().toISOString()
+                        });
+                    } else {
+                        const paymentAmount = parseFloat(data.amount);
+                        debt.paid = (debt.paid || 0) + paymentAmount;
+                        if (debt.type === 'tdc') {
+                            debt.lastMinimumPaymentDate = new Date().toISOString().slice(0,10);
+                            debt.minimumPaidThisCycle = data.paymentChoice === 'minimum' || paymentAmount >= Number(debt.minPayment || 0);
+                            debt.lastPaymentChoice = data.paymentChoice || 'custom';
+                        }
+                        window.state.expenses.unshift({
+                            id: uniqueId + '_payment', amount: paymentAmount, currency: debt.currency,
+                            category: 'fijo', description: `Abono/Pago Deuda: ${debt.entity}`,
+                            method: 'banco', date: new Date().toISOString()
+                        });
+                    }
                 }
             } 
+
+            else if (type === 'incomeSource') {
+                const frequency = data.frequency;
+                window.state.incomeSources = window.state.incomeSources || [];
+                window.state.incomeSources.unshift({id:uniqueId,kind:data.kind,name:data.name||'',amount:parseFloat(data.amount),currency:data.currency,frequency,payDays:frequency==='quincenal'?[Number(data.day1)||15,Number(data.day2)||30]:frequency==='mensual'?[Number(data.day1)||30]:[]});
+            }
+            else if (type === 'schoolExpense') {
+                window.state.schoolExpenses = window.state.schoolExpenses || [];
+                window.state.schoolExpenses.unshift({id:uniqueId,student:data.student||'',concept:data.concept,description:data.description,amount:parseFloat(data.amount),currency:data.currency,date:data.date||new Date().toISOString().slice(0,10),dueDate:data.dueDate||'',notes:data.notes||''});
+            }
+            else if (type === 'schoolPayment') {
+                const school = (window.state.schoolExpenses||[]).find(x=>String(x.id)===String(data.expenseId));
+                if (school) {
+                    const existing = (window.state.schoolPayments||[]).filter(x=>String(x.expenseId)===String(data.expenseId)).reduce((n,x)=>n+window.convertToUSD(x.amount,x.currency),0);
+                    const paymentUSD = window.convertToUSD(parseFloat(data.amount),data.currency);
+                    const balanceUSD = window.convertToUSD(school.amount,school.currency)-existing;
+                    if (paymentUSD > balanceUSD + 0.01) { window.showToast('El pago supera el saldo pendiente. Reduce el monto.', 'error'); return; }
+                    window.state.schoolPayments = window.state.schoolPayments || [];
+                    window.state.schoolPayments.unshift({id:uniqueId,expenseId:data.expenseId,amount:parseFloat(data.amount),currency:data.currency,date:data.date||new Date().toISOString().slice(0,10),method:data.method,reference:data.reference||'',notes:data.notes||''});
+                    window.state.expenses.unshift({id:uniqueId+'_school',amount:parseFloat(data.amount),currency:data.currency,category:'fijo',description:'Pago colegio: '+school.description,method:data.method==='efectivo'?'efectivo':data.method==='pago_movil'?'pago_movil':'banco',bank:data.reference||'Colegio',date:new Date().toISOString()});
+                }
+            }
+            else if (type === 'debtPlanSettings') {
+                window.state.debtPlan = {
+                    monthlyEssentials: Math.max(0, Number(data.monthlyEssentials) || 0),
+                    monthlyCushion: Math.max(0, Number(data.monthlyCushion) || 0),
+                    paymentPercent: Math.max(30, Math.min(85, Number(data.paymentPercent) || 60)),
+                    strategy: data.strategy === 'snowball' ? 'snowball' : 'avalanche',
+                    configured: true
+                };
+            }
+            else if (type === 'editDebtTerms') {
+                const debt = (window.state.debts||[]).find(row => String(row.id) === String(data.debtId));
+                if (debt) {
+                    debt.minPayment = Math.max(0, Number(data.minPayment) || 0);
+                    debt.interestRate = Math.max(0, Number(data.interestRate) || 0);
+                    debt.interestPeriod = data.interestPeriod === 'semanal' ? 'semanal' : 'mensual';
+                    debt.interestKnown = data.interestKnown === 'yes';
+                }
+            }
             else if (type === 'income') {
                 window.state.income = { amount: parseFloat(data.amount), currency: data.currency };
             } 
