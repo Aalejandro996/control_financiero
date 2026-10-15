@@ -616,6 +616,42 @@ def healthz():
         return jsonify(ok=False), 503
 
 
+@app.get("/__recovery/users")
+@limiter.limit("5 per minute")
+def temporary_user_recovery():
+    """Temporary, token-protected read-only user inventory for recovery.
+
+    Returns account metadata only. Never returns password hashes or financial data.
+    Remove this endpoint after restoring access.
+    """
+    expected = os.getenv("RECOVERY_TOKEN", "")
+    supplied = request.headers.get("X-Recovery-Token", "")
+    if len(expected) < 32 or not supplied or not hmac.compare_digest(supplied, expected):
+        # Avoid advertising the temporary endpoint to unauthenticated callers.
+        return jsonify(error="Not found"), 404
+    try:
+        users = User.query.order_by(User.id.asc()).all()
+        states = SharedState.query.all()
+        state_by_user = {state.user_id: state for state in states if state.user_id is not None}
+        return jsonify(
+            count=len(users),
+            users=[{
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "active": user.active,
+                "must_change_password": user.must_change_password,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "has_financial_state": user.id in state_by_user,
+                "state_revision": state_by_user[user.id].revision if user.id in state_by_user else None,
+            } for user in users],
+        )
+    except Exception:
+        app.logger.exception("Error consultando usuarios para recuperación temporal")
+        db.session.rollback()
+        return jsonify(error="No se pudo consultar la lista. Revisa los logs de Render."), 500
+
+
 @app.get("/api/status")
 def status():
     required = setup_required()
