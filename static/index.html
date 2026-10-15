@@ -84,6 +84,17 @@
             expenses: window.state.expenses,
             debts: window.state.debts
         });
+        // Comparación estable: el orden de las propiedades de objetos no debe
+        // provocar sincronizaciones o repintados innecesarios.
+        window.stableJSON = (value) => JSON.stringify(value, (_key, item) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+                return Object.keys(item).sort().reduce((sorted, key) => {
+                    sorted[key] = item[key];
+                    return sorted;
+                }, {});
+            }
+            return item;
+        });
         window.applySharedData = (data) => {
             const keepView = window.state.view;
             const keepRole = window.state.role;
@@ -150,11 +161,14 @@
                     }
                     mergedView[key] = Array.from(remoteRows.values()).sort((a,b) => String(b.date || '').localeCompare(String(a.date || '')));
                 }
+                const visibleDataBeforeMerge = window.stableJSON(window.sharedDataFromState());
                 window.cloudRevision = result.revision;
                 window.cloudSnapshot = JSON.parse(JSON.stringify(result.data));
                 window.applySharedData(mergedView);
-                window.updateUI();
-                if (JSON.stringify(window.sharedDataFromState()) !== JSON.stringify(window.cloudSnapshot)) window.syncAgain = true;
+                // No reconstruir todo el DOM para cada respuesta de guardado; hacerlo
+                // solo si la fusión incorporó datos que no estaban ya en pantalla.
+                if (window.stableJSON(window.sharedDataFromState()) !== visibleDataBeforeMerge) window.updateUI();
+                if (window.stableJSON(window.sharedDataFromState()) !== window.stableJSON(window.cloudSnapshot)) window.syncAgain = true;
             } catch (error) {
                 if (error.status === 409 && error.payload?.data) {
                     window.cloudRevision = error.payload.revision;
@@ -177,7 +191,7 @@
         };
         window.saveState = () => {
             window.updateUI();
-            if (window.cloudSnapshot && JSON.stringify(window.sharedDataFromState()) !== JSON.stringify(window.cloudSnapshot)) window.syncSharedState();
+            if (window.cloudSnapshot && window.stableJSON(window.sharedDataFromState()) !== window.stableJSON(window.cloudSnapshot)) window.syncSharedState();
         };
         // --- UTILS FORMATO MONEDA ---
         window.formatMoney = (amount, currencyCode) => {
@@ -221,13 +235,22 @@
                 if (!Array.isArray(data) || data.length === 0) throw new Error('Respuesta de tasa inválida');
                 const oficial = data.find(d => d.fuente === 'oficial' || (d.nombre || '').toLowerCase().includes('bcv')) || data[0];
                 if (oficial && Number(oficial.promedio) > 0) {
-                    window.state.exchangeRate = Number(oficial.promedio);
-                    console.log('Tasa BCV Actualizada (Local):', window.state.exchangeRate);
-                    window.saveState();
+                    const nextRate = Number(oficial.promedio);
+                    if (Math.abs(nextRate - Number(window.state.exchangeRate)) >= 0.005) {
+                        window.state.exchangeRate = nextRate;
+                        // Actualizar solo la cifra de la cabecera. La recarga completa
+                        // reiniciaba la animación de toda la pantalla al llegar la tasa.
+                        const rateNode = document.getElementById('exchange-rate-value');
+                        if (rateNode) rateNode.textContent = `Bs. ${nextRate.toFixed(2)}`;
+                        // Si la vista está mostrando bolívares, los importes convertidos
+                        // también deben refrescarse; en USD basta cambiar la tasa de cabecera.
+                        if (window.state.currency === 'BS' && window.authUser) window.updateUI();
+                        if (window.authUser && window.cloudSnapshot) window.syncSharedState();
+                    }
                 }
             } catch (error) {
-                console.error("Error obteniendo API BCV. Usando tasa guardada:", window.state.exchangeRate);
-                window.updateUI();
+                // Una caída de la API cambiaria no debe redibujar la aplicación.
+                console.warn("No se pudo actualizar la tasa; se conserva la tasa guardada:", error.message);
             }
         };
 
@@ -550,7 +573,7 @@
                         <div class="flex items-center gap-3">
                             <div class="text-right hidden sm:block">
                                 <div class="text-xs text-gray-500 font-medium">Tasa BCV</div>
-                                <div class="font-bold text-gray-800">Bs. ${window.state.exchangeRate.toFixed(2)}</div>
+                                <div id="exchange-rate-value" class="font-bold text-gray-800">Bs. ${window.state.exchangeRate.toFixed(2)}</div>
                             </div>
                             <button onclick="window.toggleGlobalCurrency()" class="bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-2 rounded-xl text-sm font-bold text-slate-700 transition">
                                 ${window.state.currency === 'USD' ? '<i class="fas fa-dollar-sign mr-1 text-green-600"></i> USD' : '<span class="mr-1 text-blue-600">Bs.</span> VES'}

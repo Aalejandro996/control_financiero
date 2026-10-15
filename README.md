@@ -2,6 +2,10 @@
 
 Esta versión conserva las pantallas funcionales del HTML anterior y agrega un backend Flask, cuentas individuales, permisos administrador/usuario, PostgreSQL para datos compartidos y una versión instalable como PWA en Chrome para Android. La app **no está desplegada todavía**; el código está preparado para probarse localmente y publicar desde GitHub en Render. Importante: ejecutar `python app.py` en la laptop usa una base SQLite local separada; para que laptop y Pixel compartan la misma información, abre la URL HTTPS de Render en ambos dispositivos.
 
+## Corrección visual (versión 2)
+
+Si la versión publicada parpadea después de iniciar sesión, publica esta versión actualizada: evita volver a construir toda la pantalla al terminar cada sincronización sin cambios y actualiza la tasa cambiaria sin repintar el dashboard completo cuando la vista está en USD. El service worker usa una nueva versión de caché para que los navegadores actualicen la interfaz. Tras el despliegue, recarga la página con `Cmd + Shift + R` en Mac; en Android, cierra la pestaña y abre de nuevo la URL.
+
 ## Qué cambia
 
 - Las ventanas de los formularios se insertan correctamente en pantalla.
@@ -92,4 +96,3 @@ python tests/smoke_test.py
 ```
 
 Este script crea una base SQLite temporal y comprueba la configuración inicial, inicio de sesión, contraseña temporal, acceso compartido y que los usuarios normales no puedan borrar gastos ni administrar cuentas.
-# control_financiero
