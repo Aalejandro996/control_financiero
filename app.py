@@ -652,6 +652,49 @@ def temporary_user_recovery():
         return jsonify(error="No se pudo consultar la lista. Revisa los logs de Render."), 500
 
 
+@app.post("/__recovery/reset-password/amunoz")
+@limiter.limit("3 per hour")
+def temporary_reset_amunoz_password():
+    """Temporary emergency reset for the named original admin only.
+
+    The endpoint is gated by a separately configured long recovery token,
+    returns a random temporary password once, and forces a password change.
+    Remove this endpoint and RECOVERY_TOKEN after access is restored.
+    """
+    expected = os.getenv("RECOVERY_TOKEN", "")
+    supplied = request.headers.get("X-Recovery-Token", "")
+    if len(expected) < 32 or not supplied or not hmac.compare_digest(supplied, expected):
+        return jsonify(error="Not found"), 404
+
+    user = User.query.filter_by(username="amunoz", role="admin", active=True).first()
+    if user is None:
+        return jsonify(error="La cuenta administradora amunoz no está disponible."), 404
+
+    # Token-url-safe random password; the browser will force the owner to change it.
+    temporary_password = secrets.token_urlsafe(24)
+    user.password_hash = generate_password_hash(temporary_password)
+    user.must_change_password = True
+    try:
+        db.session.commit()
+        audit("password_reset_via_recovery", "Restablecimiento temporal para amunoz", user.id)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Falló el restablecimiento temporal de contraseña")
+        return jsonify(error="No se pudo restablecer la contraseña. Revisa los logs de Render."), 500
+
+    response = jsonify(
+        ok=True,
+        username=user.username,
+        temporary_password=temporary_password,
+        must_change_password=True,
+        message="Inicia sesión con esta contraseña temporal y cámbiala inmediatamente. Retira luego RECOVERY_TOKEN y los endpoints temporales."
+    )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return response
+
+
 @app.get("/api/status")
 def status():
     required = setup_required()
