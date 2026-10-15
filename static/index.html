@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="description" content="Control financiero personal sincronizado y protegido.">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <title>Control Financiero - Recuperación Económica</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="text-gray-800 antialiased h-screen flex flex-col overflow-hidden">
+
+    <script>
+        // --- GLOBAL STATE & LOCAL STORAGE ---
+        // Definimos el estado por defecto si no hay nada guardado
+        const defaultState = {
+            view: 'login', // login, dashboard, expenses, debts
+            role: null, // 'supervisor', 'deudor'
+            currency: 'USD', // Global display currency: 'USD' or 'BS'
+            exchangeRate: 40.00, // Tasa de respaldo
+            
+            income: { amount: 0, currency: 'USD' },
+            budgets: { transporte: 0, comida: 0, fijo: 0, hormiga: 0 },
+            expenses: [],
+            debts: [],
+            
+            modals: { active: null, data: null }
+        };
+
+        // La base de datos del servidor será la fuente compartida. Si existían datos
+        // del HTML anterior en este navegador, los mantenemos en memoria solo para
+        // ofrecer una migración explícita después del primer inicio de sesión.
+        window.legacyLocalState = null;
+        try {
+            const oldLocalData = localStorage.getItem('finControlDataLocal');
+            if (oldLocalData) window.legacyLocalState = JSON.parse(oldLocalData);
+        } catch (error) {
+            window.legacyLocalState = null;
+        }
+        window.state = JSON.parse(JSON.stringify(defaultState));
+        window.authUser = null;
+        window.setupRequired = false;
+        window.csrfToken = null;
+        window.cloudRevision = 0;
+        window.cloudSnapshot = null;
+        window.syncInProgress = false;
+        window.syncAgain = false;
+        window.usersCache = [];
+        window.notify = (message, type = 'info') => {
+            let node = document.getElementById('app-toast');
+            if (!node) {
+                node = document.createElement('div');
+                node.id = 'app-toast';
+                node.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-[92vw] px-4 py-3 rounded-xl shadow-xl text-sm font-semibold';
+                document.body.appendChild(node);
+            }
+            node.textContent = message;
+            node.style.background = type === 'error' ? '#fee2e2' : type === 'success' ? '#d1fae5' : '#e0f2fe';
+            node.style.color = type === 'error' ? '#991b1b' : type === 'success' ? '#065f46' : '#075985';
+            node.classList.remove('hidden');
+            clearTimeout(window.toastTimer);
+            window.toastTimer = setTimeout(() => node.classList.add('hidden'), 5200);
+        };
+        window.escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        window.sharedDataFromState = () => ({
+            currency: window.state.currency,
+            exchangeRate: window.state.exchangeRate,
+            income: window.state.income,
+            budgets: window.state.budgets,
+            expenses: window.state.expenses,
+            debts: window.state.debts
+        });
+        window.applySharedData = (data) => {
+            const keepView = window.state.view;
+            const keepRole = window.state.role;
+            window.state = { ...window.state, ...data, view: keepView, role: keepRole, modals: { active: null, data: null } };
+        };
+        window.clearClientSession = () => {
+            window.authUser = null;
+            window.csrfToken = null;
+            window.cloudSnapshot = null;
+            window.cloudRevision = 0;
+            window.state = JSON.parse(JSON.stringify(defaultState));
+            window.updateUI();
+        };
+        window.apiRequest = async (url, options = {}) => {
+            const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+            if (window.csrfToken && !['GET', 'HEAD'].includes((options.method || 'GET').toUpperCase())) headers['X-CSRF-Token'] = window.csrfToken;
+            let response;
+            try { response = await fetch(url, { credentials: 'same-origin', ...options, headers }); }
+            catch (error) { throw new Error('No hay conexión con el servidor. Comprueba internet e inténtalo de nuevo.'); }
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const err = new Error(payload.error || `Error de servidor (${response.status})`);
+                err.status = response.status; err.payload = payload;
+                if (response.status === 401 && window.authUser && !['/api/login', '/api/setup'].includes(url)) window.clearClientSession();
+                throw err;
+            }
+            return payload;
+        };
+        window.refreshSharedState = async () => {
+            const result = await window.apiRequest('/api/state');
+            window.cloudRevision = result.revision;
+            window.cloudSnapshot = JSON.parse(JSON.stringify(result.data));
+            window.applySharedData(result.data);
+        };
+        window.syncSharedState = async () => {
+            if (!window.authUser || window.authUser.must_change_password || !window.cloudSnapshot) return;
+            if (window.syncInProgress) {
+                if (JSON.stringify(window.sharedDataFromState()) !== JSON.stringify(window.cloudSnapshot)) window.syncAgain = true;
+                return;
+            }
+            if (JSON.stringify(window.sharedDataFromState()) === JSON.stringify(window.cloudSnapshot)) return;
+            window.syncInProgress = true;
+            try {
+                const sentData = JSON.parse(JSON.stringify(window.sharedDataFromState()));
+                const previousBase = JSON.parse(JSON.stringify(window.cloudSnapshot));
+                const body = { data: sentData, base_data: previousBase, base_revision: window.cloudRevision };
+                const result = await window.apiRequest('/api/state', { method: 'PUT', body: JSON.stringify(body) });
+                const latestLocal = JSON.parse(JSON.stringify(window.sharedDataFromState()));
+                const mergedView = JSON.parse(JSON.stringify(result.data));
+                // Preserve edits made while the request was in flight, without discarding
+                // rows concurrently added on the other device.
+                for (const key of ['currency', 'exchangeRate', 'income', 'budgets']) {
+                    if (JSON.stringify(latestLocal[key]) !== JSON.stringify(sentData[key])) mergedView[key] = latestLocal[key];
+                }
+                for (const key of ['expenses', 'debts']) {
+                    const baseRows = new Map((sentData[key] || []).map(row => [String(row.id), row]));
+                    const localRows = new Map((latestLocal[key] || []).map(row => [String(row.id), row]));
+                    const remoteRows = new Map((result.data[key] || []).map(row => [String(row.id), row]));
+                    const ids = new Set([...baseRows.keys(), ...localRows.keys()]);
+                    for (const id of ids) {
+                        const before = baseRows.get(id), after = localRows.get(id);
+                        if (JSON.stringify(before) === JSON.stringify(after)) continue;
+                        if (after === undefined) remoteRows.delete(id); else remoteRows.set(id, after);
+                    }
+                    mergedView[key] = Array.from(remoteRows.values()).sort((a,b) => String(b.date || '').localeCompare(String(a.date || '')));
+                }
+                window.cloudRevision = result.revision;
+                window.cloudSnapshot = JSON.parse(JSON.stringify(result.data));
+                window.applySharedData(mergedView);
+                window.updateUI();
+                if (JSON.stringify(window.sharedDataFromState()) !== JSON.stringify(window.cloudSnapshot)) window.syncAgain = true;
+            } catch (error) {
+                if (error.status === 409 && error.payload?.data) {
+                    window.cloudRevision = error.payload.revision;
+                    window.cloudSnapshot = JSON.parse(JSON.stringify(error.payload.data));
+                    window.applySharedData(error.payload.data);
+                    window.updateUI();
+                    window.notify(error.message, 'error');
+                } else if (error.status === 401) {
+                    window.clearClientSession();
+                } else {
+                    window.notify('No se pudo sincronizar con la nube. Mantén esta pestaña abierta y vuelve a conectarte para guardar los cambios.', 'error');
+                }
+            } finally {
+                window.syncInProgress = false;
+                if (window.syncAgain) {
+                    window.syncAgain = false;
+                    window.syncSharedState();
+                }
+            }
+        };
+        window.saveState = () => {
+            window.updateUI();
+            if (window.cloudSnapshot && JSON.stringify(window.sharedDataFromState()) !== JSON.stringify(window.cloudSnapshot)) window.syncSharedState();
+        };
+        // --- UTILS FORMATO MONEDA ---
+        window.formatMoney = (amount, currencyCode) => {
+            const code = currencyCode === 'BS' ? 'VES' : currencyCode;
+            try {
+                return new Intl.NumberFormat('es-VE', { style: 'currency', currency: code }).format(amount);
+            } catch (e) {
+                return `${code === 'VES' ? 'Bs.' : '$'} ${parseFloat(amount).toFixed(2)}`;
+            }
+        };
+
+        window.convertToUSD = (amount, currencyCode) => {
+            if (currencyCode === 'USD') return parseFloat(amount);
+            return parseFloat(amount) / window.state.exchangeRate;
+        };
+
+        window.convertToVES = (amount, currencyCode) => {
+            if (currencyCode === 'BS' || currencyCode === 'VES') return parseFloat(amount);
+            return parseFloat(amount) * window.state.exchangeRate;
+        };
+
+        window.getDisplayAmount = (usdAmount) => {
+            if (window.state.currency === 'USD') {
+                return window.formatMoney(usdAmount, 'USD');
+            } else {
+                return window.formatMoney(window.convertToVES(usdAmount, 'USD'), 'VES');
+            }
+        };
+
+        window.formatDate = (isoString) => {
+            const d = new Date(isoString);
+            return d.toLocaleDateString('es-VE', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        };
+
+        // --- FETCH BCV API ---
+        window.fetchBCVRate = async () => {
+            try {
+                const response = await fetch('https://ve.dolarapi.com/v1/dolares');
+                if (!response.ok) throw new Error(`BCV API respondió ${response.status}`);
+                const data = await response.json();
+                if (!Array.isArray(data) || data.length === 0) throw new Error('Respuesta de tasa inválida');
+                const oficial = data.find(d => d.fuente === 'oficial' || (d.nombre || '').toLowerCase().includes('bcv')) || data[0];
+                if (oficial && Number(oficial.promedio) > 0) {
+                    window.state.exchangeRate = Number(oficial.promedio);
+                    console.log('Tasa BCV Actualizada (Local):', window.state.exchangeRate);
+                    window.saveState();
+                }
+            } catch (error) {
+                console.error("Error obteniendo API BCV. Usando tasa guardada:", window.state.exchangeRate);
+                window.updateUI();
+            }
+        };
+
+        // --- LOGIC FUNCTIONS ---
+        window.getTotals = () => {
+            const incomeUSD = window.convertToUSD(window.state.income.amount, window.state.income.currency);
+            
+            // Gastos de ESTE MES
+            const now = new Date();
+            const expensesThisMonth = window.state.expenses.filter(exp => {
+                const d = new Date(exp.date);
+                return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+            });
+
+            const expensesUSD = expensesThisMonth.reduce((sum, exp) => sum + window.convertToUSD(exp.amount, exp.currency), 0);
+            
+            // Deuda Total Restante
+            const totalDebtUSD = window.state.debts.reduce((sum, debt) => sum + window.convertToUSD(debt.amount - (debt.paid || 0), debt.currency), 0);
+            
+            return { income: incomeUSD, expenses: expensesUSD, debt: totalDebtUSD, available: incomeUSD - expensesUSD };
+        };
+
+        window.getCategorySpends = () => {
+            const spends = { transporte: 0, comida: 0, fijo: 0, hormiga: 0 };
+            const now = new Date();
+            window.state.expenses.forEach(exp => {
+                const d = new Date(exp.date);
+                if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
+                    if (spends[exp.category] !== undefined) {
+                        spends[exp.category] += window.convertToUSD(exp.amount, exp.currency);
+                    }
+                }
+            });
+            return spends;
+        };
+
+        // --- NAVIGATION & UI STATES ---
+        window.updateUI = () => {
+            const appDiv = document.getElementById('app-root');
+            if (!appDiv) return;
+            if (!window.authUser) {
+                appDiv.innerHTML = window.setupRequired ? renderSetupScreen() : renderAuthScreen();
+                return;
+            }
+            if (window.authUser.must_change_password) {
+                appDiv.innerHTML = renderPasswordChangeScreen();
+                return;
+            }
+            if (window.state.view === 'login') appDiv.innerHTML = renderLogin();
+            else appDiv.innerHTML = renderMainLayout();
+            appDiv.insertAdjacentHTML('beforeend', renderModal());
+        };
+
+        window.setView = (view) => {
+            window.state.view = view;
+            window.saveState();
+        };
+
+        window.toggleGlobalCurrency = () => {
+            window.state.currency = window.state.currency === 'USD' ? 'BS' : 'USD';
+            window.saveState();
+        };
+
+        window.selectRole = (role) => {
+            if (!role) { window.logoutAccount(); return; }
+            if (role === 'supervisor' && window.authUser?.role !== 'admin') return;
+            window.state.role = role;
+            window.state.view = 'dashboard';
+            window.saveState();
+        };
+
+        window.offerLegacyDataImport = async () => {
+            const old = window.legacyLocalState;
+            if (!old) return;
+            const hasData = (Array.isArray(old.expenses) && old.expenses.length) ||
+                (Array.isArray(old.debts) && old.debts.length) || Number(old.income?.amount || 0) !== 0 ||
+                Object.values(old.budgets || {}).some(value => Number(value || 0) !== 0);
+            if (!hasData) { window.legacyLocalState = null; return; }
+            const cloudIsEmpty = window.cloudRevision === 0 &&
+                (!window.cloudSnapshot?.expenses?.length) && (!window.cloudSnapshot?.debts?.length) &&
+                Number(window.cloudSnapshot?.income?.amount || 0) === 0 &&
+                Object.values(window.cloudSnapshot?.budgets || {}).every(value => Number(value || 0) === 0);
+            if (!cloudIsEmpty || window.authUser?.role !== 'admin') {
+                window.notify('Hay datos locales de la versión anterior, pero no se importaron porque la nube no está vacía o no tienes permisos de administrador. Exporta el respaldo local para conservarlos.', 'info');
+                window.legacyLocalState = null;
+                return;
+            }
+            if (!confirm('Este navegador contiene registros de la versión anterior. ¿Quieres importarlos al espacio compartido para que estén disponibles en laptop y Pixel? Solo se hará si la base de datos en la nube está vacía. Si cancelas, los datos antiguos locales se conservarán.')) {
+                window.legacyLocalState = null;
+                return;
+            }
+            const legacyImport = {
+                currency: old.currency === 'BS' ? 'BS' : 'USD',
+                exchangeRate: Number(old.exchangeRate) > 0 ? Number(old.exchangeRate) : 40,
+                income: old.income && typeof old.income === 'object' ? old.income : { amount: 0, currency: 'USD' },
+                budgets: old.budgets && typeof old.budgets === 'object' ? old.budgets : { transporte: 0, comida: 0, fijo: 0, hormiga: 0 },
+                expenses: Array.isArray(old.expenses) ? old.expenses.filter(row => row && /^[A-Za-z0-9_-]{1,100}$/.test(String(row.id || ''))).map(row => ({ ...row, category: ['comida','transporte','fijo','hormiga'].includes(row.category) ? row.category : 'fijo', amount: Math.max(0, Number(row.amount) || 0), currency: row.currency === 'BS' ? 'BS' : 'USD', description: String(row.description || 'Gasto').slice(0,250), bank: String(row.bank || '').slice(0,120) })) : [],
+                debts: Array.isArray(old.debts) ? old.debts.filter(row => row && /^[A-Za-z0-9_-]{1,100}$/.test(String(row.id || ''))).map(row => ({ ...row, type: ['tdc','cashea','prestamo','otro'].includes(row.type) ? row.type : 'otro', amount: Math.max(0, Number(row.amount) || 0), paid: Math.max(0, Number(row.paid) || 0), currency: row.currency === 'BS' ? 'BS' : 'USD', entity: String(row.entity || 'Entidad').slice(0,120), description: String(row.description || 'Deuda').slice(0,250), interestRate: Math.max(0, Number(row.interestRate) || 0), interestPeriod: ['mensual','semanal'].includes(row.interestPeriod) ? row.interestPeriod : 'mensual' })) : []
+            };
+            try {
+                const result = await window.apiRequest('/api/import-legacy', { method: 'POST', body: JSON.stringify({ data: legacyImport }) });
+                window.cloudRevision = result.revision;
+                window.cloudSnapshot = JSON.parse(JSON.stringify(result.data));
+                window.applySharedData(result.data);
+                window.legacyLocalState = null;
+                try { localStorage.removeItem('finControlDataLocal'); } catch (_) {}
+                window.notify('Datos anteriores enviados a la base compartida.', 'success');
+            } catch (error) {
+                window.notify(error.message + ' Los datos locales antiguos se conservaron.', 'error');
+            }
+        };
+
+        window.finishAuthentication = async (result) => {
+            window.authUser = result.user;
+            window.csrfToken = result.csrf_token;
+            window.state.role = result.user.role === 'admin' ? 'supervisor' : 'deudor';
+            window.state.view = 'dashboard';
+            if (!result.user.must_change_password) {
+                try {
+                    await window.refreshSharedState();
+                    window.state.role = result.user.role === 'admin' ? 'supervisor' : 'deudor';
+                    window.state.view = 'dashboard';
+                } catch (error) {
+                    window.notify(error.message, 'error');
+                    window.clearClientSession();
+                    return;
+                }
+            }
+            if (!result.user.must_change_password) await window.offerLegacyDataImport();
+            window.updateUI();
+            if (!result.user.must_change_password) window.fetchBCVRate();
+        };
+
+        window.handleAuthSubmit = async (event, kind) => {
+            event.preventDefault();
+            const form = event.target;
+            const data = Object.fromEntries(new FormData(form).entries());
+            const submit = form.querySelector('[type="submit"]');
+            if (submit) { submit.disabled = true; submit.textContent = 'Procesando...'; }
+            try {
+                if (kind === 'login') {
+                    const result = await window.apiRequest('/api/login', { method: 'POST', body: JSON.stringify(data) });
+                    await window.finishAuthentication(result);
+                } else if (kind === 'setup') {
+                    const result = await window.apiRequest('/api/setup', { method: 'POST', body: JSON.stringify(data) });
+                    await window.finishAuthentication(result);
+                    window.notify('Cuenta administradora creada. Guarda tus credenciales de forma segura.', 'success');
+                } else if (kind === 'changePassword') {
+                    const result = await window.apiRequest('/api/change-password', { method: 'POST', body: JSON.stringify(data) });
+                    await window.finishAuthentication(result);
+                    window.notify('Contraseña actualizada.', 'success');
+                }
+            } catch (error) {
+                window.notify(error.message, 'error');
+                if (submit) { submit.disabled = false; submit.textContent = kind === 'login' ? 'Iniciar sesión' : kind === 'setup' ? 'Crear administrador' : 'Actualizar contraseña'; }
+            }
+        };
+
+        window.logoutAccount = async () => {
+            try {
+                if (window.authUser) await window.apiRequest('/api/logout', { method: 'POST', body: '{}' });
+            } catch (error) {
+                if (error.status === 401) { window.clearClientSession(); return; }
+                window.notify('No se pudo confirmar el cierre de sesión. Conéctate a internet y vuelve a intentarlo; la sesión del servidor podría seguir activa.', 'error');
+                return;
+            }
+            window.clearClientSession();
+        };
+
+        window.showUsersManager = async () => {
+            try {
+                const result = await window.apiRequest('/api/users');
+                window.usersCache = result.users;
+                window.openModal('manageUsers');
+            } catch (error) { window.notify(error.message, 'error'); }
+        };
+        window.exportFinancialBackup = async () => {
+            try {
+                const result = await window.apiRequest('/api/state');
+                const backup = { app: 'Control Financiero', schema_version: 1, exported_at: new Date().toISOString(), data: result.data };
+                const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url; link.download = `respaldo-control-financiero-${new Date().toISOString().slice(0,10)}.json`;
+                document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500);
+                window.notify('Respaldo descargado. Guárdalo en un lugar privado.', 'success');
+            } catch (error) { window.notify(error.message, 'error'); }
+        };
+        window.handleImportBackup = async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            if (!confirm('La importación solo se permite si la nube no tiene ingresos, presupuestos, gastos ni deudas. ¿Continuar?')) { event.target.value = ''; return; }
+            try {
+                const parsed = JSON.parse(await file.text());
+                const data = parsed.data || parsed.state || parsed;
+                const result = await window.apiRequest('/api/import-legacy', { method: 'POST', body: JSON.stringify({ data }) });
+                window.cloudRevision = result.revision;
+                window.cloudSnapshot = JSON.parse(JSON.stringify(result.data));
+                window.applySharedData(result.data);
+                window.updateUI();
+                window.notify('Respaldo importado y sincronizado.', 'success');
+            } catch (error) { window.notify(error.message || 'No se pudo leer el archivo JSON.', 'error'); }
+            finally { event.target.value = ''; }
+        };
+        window.handleUserCreate = async (event) => {
+            event.preventDefault();
+            const data = Object.fromEntries(new FormData(event.target).entries());
+            try {
+                const result = await window.apiRequest('/api/users', { method: 'POST', body: JSON.stringify(data) });
+                const credential = result.temporary_password;
+                window.notify('Cuenta creada. La contraseña temporal se mostrará una sola vez.', 'success');
+                window.prompt('Entrega esta contraseña temporal al usuario por un canal seguro. Se le pedirá cambiarla al ingresar:', credential);
+                const refreshed = await window.apiRequest('/api/users');
+                window.usersCache = refreshed.users;
+                window.updateUI();
+            } catch (error) { window.notify(error.message, 'error'); }
+        };
+        window.resetUserPassword = async (id, username) => {
+            if (!confirm(`¿Generar una contraseña temporal nueva para ${username}? Tendrá que cambiarla al ingresar.`)) return;
+            try {
+                const result = await window.apiRequest(`/api/users/${id}/reset-password`, { method: 'POST', body: '{}' });
+                window.prompt('Entrega esta nueva contraseña temporal por un canal privado. Se mostrará una sola vez:', result.temporary_password);
+                window.notify('Contraseña temporal generada. El usuario debe cambiarla al entrar.', 'success');
+            } catch (error) { window.notify(error.message, 'error'); }
+        };
+        window.toggleUserActive = async (id, active) => {
+            if (!confirm(active ? '¿Activar esta cuenta?' : '¿Desactivar el acceso de esta cuenta?')) return;
+            try {
+                await window.apiRequest(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ active }) });
+                const refreshed = await window.apiRequest('/api/users');
+                window.usersCache = refreshed.users;
+                window.updateUI();
+                window.notify('Permisos actualizados.', 'success');
+            } catch (error) { window.notify(error.message, 'error'); }
+        };
+
+        // --- RENDER FUNCTIONS ---
+        const renderAuthScreen = () => `
+            <div class="min-h-full flex items-center justify-center bg-slate-900 p-4 fade-in overflow-y-auto">
+                <div class="bg-white p-7 sm:p-8 rounded-3xl shadow-2xl max-w-md w-full my-6">
+                    <div class="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-5 text-blue-600 text-3xl"><i class="fas fa-wallet"></i></div>
+                    <h1 class="text-2xl font-bold text-gray-800 text-center mb-2">Control Financiero</h1>
+                    <p class="text-gray-500 text-sm text-center mb-7">Acceso privado · Sincronización segura</p>
+                    <form onsubmit="window.handleAuthSubmit(event, 'login')" class="space-y-4">
+                        <div><label class="block text-sm font-semibold mb-1" for="loginUsername">Usuario</label><input id="loginUsername" name="username" type="text" autocomplete="username" required minlength="3" maxlength="40" class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <div><label class="block text-sm font-semibold mb-1" for="loginPassword">Contraseña</label><input id="loginPassword" name="password" type="password" autocomplete="current-password" required class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold p-3 rounded-xl">Iniciar sesión</button>
+                    </form>
+                    <p class="text-xs text-gray-400 text-center mt-5">Solo pueden entrar las cuentas autorizadas por el administrador.</p>
+                </div>
+            </div>`;
+
+        const renderSetupScreen = () => `
+            <div class="min-h-full flex items-center justify-center bg-slate-900 p-4 fade-in overflow-y-auto">
+                <div class="bg-white p-7 sm:p-8 rounded-3xl shadow-2xl max-w-md w-full my-6">
+                    <div class="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-5 text-blue-600 text-3xl"><i class="fas fa-shield-alt"></i></div>
+                    <h1 class="text-2xl font-bold text-gray-800 text-center mb-2">Configurar administrador</h1>
+                    <p class="text-gray-500 text-sm text-center mb-6">Solo para la primera configuración. Usa el código inicial configurado en el servidor.</p>
+                    <form onsubmit="window.handleAuthSubmit(event, 'setup')" class="space-y-4">
+                        <div><label class="block text-sm font-semibold mb-1">Código de configuración</label><input name="bootstrap_token" type="password" autocomplete="off" required class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <div><label class="block text-sm font-semibold mb-1">Nombre de usuario</label><input name="username" type="text" autocomplete="username" required minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]+" class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <div><label class="block text-sm font-semibold mb-1">Contraseña (mínimo 12 caracteres)</label><input name="password" type="password" autocomplete="new-password" required minlength="12" class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold p-3 rounded-xl">Crear administrador</button>
+                    </form>
+                </div>
+            </div>`;
+
+        const renderPasswordChangeScreen = () => `
+            <div class="min-h-full flex items-center justify-center bg-slate-900 p-4 fade-in overflow-y-auto">
+                <div class="bg-white p-7 sm:p-8 rounded-3xl shadow-2xl max-w-md w-full my-6">
+                    <h1 class="text-2xl font-bold text-gray-800 mb-2">Cambia tu contraseña</h1>
+                    <p class="text-gray-500 text-sm mb-6">Por seguridad, la contraseña temporal debe cambiarse antes de usar la aplicación.</p>
+                    <form onsubmit="window.handleAuthSubmit(event, 'changePassword')" class="space-y-4">
+                        <div><label class="block text-sm font-semibold mb-1">Contraseña actual/temporal</label><input name="old_password" type="password" autocomplete="current-password" required class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <div><label class="block text-sm font-semibold mb-1">Nueva contraseña (mínimo 12 caracteres)</label><input name="new_password" type="password" autocomplete="new-password" required minlength="12" class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold p-3 rounded-xl">Actualizar contraseña</button>
+                    </form>
+                    <button onclick="window.logoutAccount()" class="w-full text-gray-500 text-sm mt-4 underline">Cerrar sesión</button>
+                </div>
+            </div>`;
+
+        const renderLogin = () => `
+            <div class="flex items-center justify-center h-full bg-slate-900 px-4 fade-in">
+                <div class="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center">
+                    <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6 text-blue-600 text-3xl shadow-inner">
+                        <i class="fas fa-wallet"></i>
+                    </div>
+                    <h1 class="text-2xl font-bold text-gray-800 mb-2">Control Financiero</h1>
+                    <p class="text-gray-500 mb-2 text-sm">Versión Local Privada</p>
+                    <p class="text-xs text-blue-500 mb-8 bg-blue-50 p-2 rounded-lg"><i class="fas fa-database"></i> Los datos se guardan en tu navegador</p>
+                    
+                    <div class="space-y-4">
+                        <button onclick="window.selectRole('deudor')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 px-6 rounded-2xl transition-colors flex items-center justify-between shadow-md">
+                            <span>Soy Deudor / Usuario</span>
+                            <i class="fas fa-arrow-right"></i>
+                        </button>
+                        <button onclick="window.selectRole('supervisor')" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-4 px-6 rounded-2xl transition-colors flex items-center justify-between border border-slate-300">
+                            <span>Soy Supervisor</span>
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const renderMainLayout = () => {
+            return `
+                <div class="flex flex-col h-full bg-gray-50">
+                    <!-- Top Navigation -->
+                    <header class="bg-white shadow-sm border-b border-gray-200 px-4 py-3 flex justify-between items-center z-10 shrink-0">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm">
+                                <i class="fas fa-chart-pie"></i>
+                            </div>
+                            <div>
+                                <h1 class="font-bold text-gray-800 leading-tight">Mi Economía</h1>
+                                <span class="text-xs text-gray-500 uppercase tracking-wide font-semibold">${window.state.role === 'supervisor' ? 'Administrador' : 'Usuario autorizado'}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="text-right hidden sm:block">
+                                <div class="text-xs text-gray-500 font-medium">Tasa BCV</div>
+                                <div class="font-bold text-gray-800">Bs. ${window.state.exchangeRate.toFixed(2)}</div>
+                            </div>
+                            <button onclick="window.toggleGlobalCurrency()" class="bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-2 rounded-xl text-sm font-bold text-slate-700 transition">
+                                ${window.state.currency === 'USD' ? '<i class="fas fa-dollar-sign mr-1 text-green-600"></i> USD' : '<span class="mr-1 text-blue-600">Bs.</span> VES'}
+                            </button>
+                            <button onclick="window.selectRole(null)" title="Cerrar sesión" class="text-gray-400 hover:text-red-500 ml-2">
+                                <i class="fas fa-sign-out-alt"></i>
+                            </button>
+                        </div>
+                    </header>
+
+                    <!-- Main Content Area -->
+                    <main class="flex-1 overflow-y-auto p-4 md:p-6 pb-24">
+                        ${window.state.view === 'dashboard' ? renderDashboard() : ''}
+                        ${window.state.view === 'expenses' ? renderExpenses() : ''}
+                        ${window.state.view === 'debts' ? renderDebts() : ''}
+                    </main>
+
+                    <!-- Bottom Navigation -->
+                    <nav class="bg-white border-t border-gray-200 fixed bottom-0 w-full px-6 py-3 flex justify-around items-center shrink-0 z-20 pb-safe">
+                        <button onclick="window.setView('dashboard')" class="${window.state.view === 'dashboard' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-home text-xl"></i>
+                            <span class="text-[10px] font-medium">Resumen</span>
+                        </button>
+                        <button onclick="window.setView('expenses')" class="${window.state.view === 'expenses' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-receipt text-xl"></i>
+                            <span class="text-[10px] font-medium">Gastos</span>
+                        </button>
+                        <button onclick="window.setView('debts')" class="${window.state.view === 'debts' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-credit-card text-xl"></i>
+                            <span class="text-[10px] font-medium">Deudas</span>
+                        </button>
+                    </nav>
+                </div>
+            `;
+        };
+
+        const renderDashboard = () => {
+            const totals = window.getTotals();
+            const categorySpends = window.getCategorySpends();
+            
+            let monthsToPayOff = 0;
+            let projectionText = "Alerta: Tus gastos superan o igualan tus ingresos. No hay capacidad matemática para pagar deudas sin ajustes.";
+            let projectionColor = "text-red-500 bg-red-50 border-red-200";
+            let projectionIcon = "fa-exclamation-triangle";
+
+            if (totals.debt <= 0) {
+                projectionText = "¡Felicidades! No tienes deudas registradas activas. Tu economía está sana.";
+                projectionColor = "text-emerald-600 bg-emerald-50 border-emerald-200";
+                projectionIcon = "fa-check-circle";
+            } else if (totals.available > 0) {
+                monthsToPayOff = Math.ceil(totals.debt / totals.available);
+                projectionText = `Destinando tu dinero sobrante mensual (${window.getDisplayAmount(totals.available)}), saldrás de todas tus deudas en aproximadamente <b>${monthsToPayOff} meses</b>.`;
+                projectionColor = "text-blue-700 bg-blue-50 border-blue-200";
+                projectionIcon = "fa-chart-line";
+            }
+
+            const categories = [
+                { id: 'comida', name: 'Comida', icon: 'fa-hamburger', color: 'bg-emerald-500', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+                { id: 'transporte', name: 'Transporte', icon: 'fa-bus', color: 'bg-blue-500', bg: 'bg-blue-100', text: 'text-blue-700' },
+                { id: 'fijo', name: 'Gasto Fijo', icon: 'fa-home', color: 'bg-purple-500', bg: 'bg-purple-100', text: 'text-purple-700' },
+                { id: 'hormiga', name: 'Hormiga', icon: 'fa-coffee', color: 'bg-orange-500', bg: 'bg-orange-100', text: 'text-orange-700' }
+            ];
+
+            return `
+                <div class="fade-in max-w-4xl mx-auto space-y-6">
+                    <!-- Resumen Financiero -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden group">
+                            <div class="absolute -right-4 -top-4 w-16 h-16 bg-green-50 rounded-full transition-transform group-hover:scale-150"></div>
+                            <div class="relative z-10 flex justify-between items-start">
+                                <div>
+                                    <p class="text-xs text-gray-500 font-medium mb-1">Ingreso Mensual</p>
+                                    <h3 class="text-xl font-bold text-gray-800">${window.getDisplayAmount(totals.income)}</h3>
+                                </div>
+                                <button onclick="window.openModal('updateIncome')" class="text-gray-400 hover:text-blue-600 bg-white p-1 rounded-full shadow-sm"><i class="fas fa-pen text-sm"></i></button>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden group">
+                            <div class="absolute -right-4 -top-4 w-16 h-16 bg-red-50 rounded-full transition-transform group-hover:scale-150"></div>
+                            <div class="relative z-10">
+                                <p class="text-xs text-gray-500 font-medium mb-1">Gastos (Mes)</p>
+                                <h3 class="text-xl font-bold text-red-600">${window.getDisplayAmount(totals.expenses)}</h3>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden group col-span-2 sm:col-span-1">
+                            <div class="relative z-10">
+                                <p class="text-xs text-gray-500 font-medium mb-1">Deuda Total</p>
+                                <h3 class="text-2xl font-bold text-orange-600">${window.getDisplayAmount(totals.debt)}</h3>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden group col-span-2 sm:col-span-1">
+                            <div class="relative z-10">
+                                <p class="text-xs text-gray-500 font-medium mb-1">Disponible (Sobrante)</p>
+                                <h3 class="text-2xl font-bold ${totals.available >= 0 ? 'text-green-600' : 'text-red-600'}">${window.getDisplayAmount(totals.available)}</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Estimaciones y Recuperación -->
+                    <div class="border rounded-2xl p-5 ${projectionColor} shadow-sm">
+                        <div class="flex gap-4 items-start">
+                            <div class="mt-1 text-2xl"><i class="fas ${projectionIcon}"></i></div>
+                            <div>
+                                <h3 class="font-bold mb-1">Proyección de Recuperación</h3>
+                                <p class="text-sm leading-relaxed">${projectionText}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Presupuesto Mensual -->
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-center mb-5">
+                            <h3 class="text-lg font-bold text-gray-800">Control de Presupuesto</h3>
+                            <button onclick="window.openModal('updateBudgets')" class="text-blue-600 text-sm font-semibold hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-blue-100"><i class="fas fa-sliders-h mr-1"></i> Límites</button>
+                        </div>
+                        
+                        <div class="space-y-5">
+                            ${categories.map(cat => {
+                                const budgetUSD = window.state.budgets[cat.id] || 0;
+                                const spentUSD = categorySpends[cat.id] || 0;
+                                const percent = budgetUSD > 0 ? Math.min((spentUSD / budgetUSD) * 100, 100) : (spentUSD > 0 ? 100 : 0);
+                                const isOver = spentUSD > budgetUSD && budgetUSD > 0;
+                                
+                                return `
+                                    <div>
+                                        <div class="flex justify-between items-end mb-2">
+                                            <div class="flex items-center gap-2">
+                                                <div class="w-8 h-8 rounded-full ${cat.bg} ${cat.text} flex items-center justify-center text-xs">
+                                                    <i class="fas ${cat.icon}"></i>
+                                                </div>
+                                                <div>
+                                                    <span class="text-sm font-semibold text-gray-700 block">${cat.name}</span>
+                                                    <span class="text-[10px] text-gray-500">Gastado: ${window.getDisplayAmount(spentUSD)}</span>
+                                                </div>
+                                            </div>
+                                            <div class="text-right">
+                                                <span class="text-xs font-bold ${isOver ? 'text-red-500' : 'text-gray-700'} bg-gray-50 px-2 py-1 rounded">
+                                                    Límite: ${window.getDisplayAmount(budgetUSD)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                                            <div class="${isOver ? 'bg-red-500' : cat.color} h-2.5 rounded-full transition-all duration-700" style="width: ${percent}%"></div>
+                                        </div>
+                                        ${isOver ? `<p class="text-[10px] text-red-500 mt-1 text-right font-medium"><i class="fas fa-exclamation-circle"></i> Te has excedido del presupuesto</p>` : ''}
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderExpenses = () => `
+            <div class="fade-in max-w-4xl mx-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">Historial de Gastos</h2>
+                    ${window.state.role === 'deudor' || window.state.role === 'supervisor' ? `
+                        <button onclick="window.openModal('addExpense')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-transform active:scale-95">
+                            <i class="fas fa-plus mr-1"></i> Gasto
+                        </button>
+                    ` : ''}
+                </div>
+
+                <div class="space-y-3">
+                    ${window.state.expenses.length === 0 ? `
+                        <div class="text-center py-10 bg-white rounded-2xl border border-gray-100 border-dashed">
+                            <div class="text-gray-300 text-4xl mb-3"><i class="fas fa-receipt"></i></div>
+                            <p class="text-gray-500 font-medium">No hay gastos registrados.</p>
+                        </div>
+                    ` : window.state.expenses.map(exp => `
+                        <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center group">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center text-lg">
+                                    <i class="fas ${exp.category === 'comida' ? 'fa-hamburger' : exp.category === 'transporte' ? 'fa-bus' : exp.category === 'fijo' ? 'fa-home' : 'fa-coffee'}"></i>
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-gray-800 text-sm capitalize">${window.escapeHTML(exp.description)}</h4>
+                                    <div class="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                                        <span>${window.formatDate(exp.date)}</span>
+                                        <span>&bull;</span>
+                                        <span><i class="fas fa-university mr-0.5"></i> ${window.escapeHTML(exp.bank || 'Efectivo')}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-bold text-gray-800">${window.getDisplayAmount(window.convertToUSD(exp.amount, exp.currency))}</div>
+                                <div class="text-[10px] text-gray-400 capitalize px-2 py-0.5 bg-gray-100 rounded inline-block mt-1">${window.escapeHTML(exp.category)}</div>
+                            </div>
+                            ${window.state.role === 'supervisor' ? `
+                                <button onclick="window.deleteDocHandler('expenses', '${exp.id}')" class="ml-3 text-red-400 hover:text-red-600 hidden group-hover:block transition-colors"><i class="fas fa-trash"></i></button>
+                            ` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+
+        const renderDebts = () => `
+            <div class="fade-in max-w-4xl mx-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">Control de Deudas</h2>
+                    <button onclick="window.openModal('addDebt')" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-transform active:scale-95">
+                        <i class="fas fa-plus mr-1"></i> Deuda
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    ${window.state.debts.length === 0 ? `
+                        <div class="text-center py-10 bg-white rounded-2xl border border-gray-100 border-dashed">
+                            <div class="text-gray-300 text-4xl mb-3"><i class="fas fa-check-circle"></i></div>
+                            <p class="text-gray-500 font-medium">No hay deudas activas. ¡Excelente!</p>
+                        </div>
+                    ` : window.state.debts.map(debt => {
+                        const paid = debt.paid || 0;
+                        const remainingUSD = window.convertToUSD(debt.amount - paid, debt.currency);
+                        const progress = debt.amount > 0 ? (paid / debt.amount) * 100 : 0;
+                        const isPaidOut = remainingUSD <= 0;
+
+                        return `
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border ${isPaidOut ? 'border-green-300 opacity-70' : 'border-gray-200'} relative">
+                            ${isPaidOut ? '<div class="absolute -top-3 -right-3 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded shadow"><i class="fas fa-check"></i> Pagada</div>' : ''}
+                            
+                            <div class="flex justify-between items-start mb-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded-full ${debt.type === 'tdc' ? 'bg-purple-100 text-purple-600' : debt.type === 'cashea' ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-600'} flex items-center justify-center text-lg">
+                                        <i class="fas ${debt.type === 'tdc' ? 'fa-credit-card' : debt.type === 'cashea' ? 'fa-shopping-bag' : 'fa-money-bill-wave'}"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-bold text-gray-800 capitalize">${window.escapeHTML(debt.entity || debt.type)} - ${window.escapeHTML(debt.description)}</h4>
+                                        <p class="text-xs text-gray-500 mt-0.5">${window.formatDate(debt.date)}</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-xs text-gray-500">Restante</div>
+                                    <div class="font-bold text-lg ${isPaidOut ? 'text-green-600' : 'text-orange-600'}">
+                                        ${window.getDisplayAmount(remainingUSD)}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-gray-50 rounded-xl p-3 mb-4 grid grid-cols-2 gap-2 text-xs">
+                                ${debt.type === 'tdc' ? `
+                                    <div><span class="text-gray-500 block">Pago Mínimo:</span> <span class="font-semibold">${window.getDisplayAmount(window.convertToUSD(debt.minPayment, debt.currency))}</span></div>
+                                    <div><span class="text-gray-500 block">Fecha Corte:</span> <span class="font-semibold">${window.escapeHTML(debt.cutDate)}</span></div>
+                                    <div><span class="text-gray-500 block">Pagar antes de:</span> <span class="font-semibold">${window.escapeHTML(debt.payBefore)}</span></div>
+                                ` : debt.type === 'cashea' ? `
+                                    <div><span class="text-gray-500 block">Cuotas Totales:</span> <span class="font-semibold">${window.escapeHTML(debt.installments)}</span></div>
+                                    <div><span class="text-gray-500 block">Factura:</span> <span class="font-semibold">${window.escapeHTML(debt.invoice || 'N/A')}</span></div>
+                                ` : `
+                                    <div><span class="text-gray-500 block">Interés:</span> <span class="font-semibold">${debt.interestRate}% ${window.escapeHTML(debt.interestPeriod)}</span></div>
+                                `}
+                                <div><span class="text-gray-500 block">Monto Original:</span> <span class="font-semibold">${window.formatMoney(debt.amount, debt.currency)}</span></div>
+                            </div>
+
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1 bg-gray-200 rounded-full h-2">
+                                    <div class="bg-green-500 h-2 rounded-full" style="width: ${progress}%"></div>
+                                </div>
+                                <span class="text-xs font-medium text-gray-600">${progress.toFixed(0)}% pagado</span>
+                            </div>
+
+                            ${!isPaidOut && (window.state.role === 'supervisor' || window.state.role === 'deudor') ? `
+                                <div class="mt-4 flex gap-2 justify-end items-center">
+                                    ${window.state.role === 'supervisor' ? `
+                                        <button onclick="window.deleteDocHandler('debts', '${debt.id}')" class="text-red-400 hover:text-red-600 text-sm px-3 mr-auto"><i class="fas fa-trash"></i> Eliminar</button>
+                                    ` : ''}
+                                    <button onclick="window.openModal('payDebt', '${debt.id}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+                                        <i class="fas fa-hand-holding-usd mr-1"></i> Abonar / Pagar
+                                    </button>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `}).join('')}
+                </div>
+            </div>
+        `;
+
+        // --- MODALS & FORMS ---
+        window.openModal = (type, id = null) => {
+            window.state.modals.active = type;
+            window.state.modals.data = id;
+            window.updateUI();
+            
+            setTimeout(() => {
+                const typeSelect = document.getElementById('debtTypeSelect');
+                if (typeSelect) {
+                    typeSelect.addEventListener('change', (e) => {
+                        document.getElementById('tdcFields').classList.add('hidden');
+                        document.getElementById('casheaFields').classList.add('hidden');
+                        document.getElementById('loanFields').classList.add('hidden');
+                        
+                        if (e.target.value === 'tdc') document.getElementById('tdcFields').classList.remove('hidden');
+                        if (e.target.value === 'cashea') document.getElementById('casheaFields').classList.remove('hidden');
+                        if (e.target.value === 'prestamo') document.getElementById('loanFields').classList.remove('hidden');
+                    });
+                }
+            }, 100);
+        };
+
+        window.closeModal = () => {
+            window.state.modals.active = null;
+            window.state.modals.data = null;
+            window.updateUI();
+        };
+
+        const renderModal = () => {
+            if (!window.state.modals.active) return '';
+
+            let content = '';
+            let title = '';
+
+            if (window.state.modals.active === 'addExpense') {
+                title = 'Registrar Gasto';
+                content = `
+                    <form onsubmit="window.handleFormSubmit(event, 'expense')" class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Monto</label>
+                                <input type="number" step="0.01" name="amount" required class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Moneda</label>
+                                <select name="currency" class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-white">
+                                    <option value="USD">USD ($)</option>
+                                    <option value="BS">Bs (VES)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Categoría</label>
+                            <select name="category" required class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-white">
+                                <option value="comida">Comida</option>
+                                <option value="transporte">Transporte</option>
+                                <option value="fijo">Gasto Fijo</option>
+                                <option value="hormiga">Gasto Hormiga</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">¿Qué se compró / pagó?</label>
+                            <input type="text" name="description" required placeholder="Ej. Almuerzo, Metro, Internet..." class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Método de Pago</label>
+                                <select name="method" class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-white">
+                                    <option value="banco">Transferencia / Tarjeta</option>
+                                    <option value="efectivo">Efectivo</option>
+                                    <option value="pago_movil">Pago Móvil</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Banco / Origen</label>
+                                <input type="text" name="bank" placeholder="Ej. Banesco, Zinli..." class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500">
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl mt-2 transition-colors">Guardar Gasto</button>
+                    </form>
+                `;
+            } else if (window.state.modals.active === 'addDebt') {
+                title = 'Registrar Nueva Deuda';
+                content = `
+                    <form onsubmit="window.handleFormSubmit(event, 'debt')" class="space-y-4 max-h-[70vh] overflow-y-auto px-1 pb-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de Deuda</label>
+                            <select id="debtTypeSelect" name="type" required class="w-full border border-gray-300 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-gray-50 font-medium">
+                                <option value="tdc">Tarjeta de Crédito</option>
+                                <option value="cashea">Cashea / App de Crédito</option>
+                                <option value="prestamo">Préstamo con Interés</option>
+                                <option value="otro">Otro</option>
+                            </select>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Monto Total</label>
+                                <input type="number" step="0.01" name="amount" required class="w-full border border-gray-300 rounded-xl p-2.5 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Moneda</label>
+                                <select name="currency" class="w-full border border-gray-300 rounded-xl p-2.5 outline-none bg-white">
+                                    <option value="USD">USD ($)</option>
+                                    <option value="BS">Bs (VES)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Entidad (Banco/Persona)</label>
+                            <input type="text" name="entity" required placeholder="Ej. Banco Mercantil, Juan Pérez..." class="w-full border border-gray-300 rounded-xl p-2.5 outline-none">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Motivo / Compra</label>
+                            <input type="text" name="description" required placeholder="Ej. Zapatos, Emergencia médica..." class="w-full border border-gray-300 rounded-xl p-2.5 outline-none">
+                        </div>
+
+                        <div id="tdcFields" class="bg-purple-50 p-3 rounded-xl border border-purple-100 space-y-3">
+                            <p class="text-xs font-bold text-purple-700 mb-2 uppercase"><i class="fas fa-credit-card"></i> Datos Tarjeta de Crédito</p>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Pago Mínimo Esperado</label>
+                                <input type="number" step="0.01" name="minPayment" class="w-full border border-purple-200 rounded-lg p-2 outline-none bg-white">
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Día de Corte</label>
+                                    <input type="number" min="1" max="31" name="cutDate" placeholder="Ej. 15" class="w-full border border-purple-200 rounded-lg p-2 outline-none bg-white">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Pagar antes de</label>
+                                    <input type="date" name="payBefore" class="w-full border border-purple-200 rounded-lg p-2 outline-none bg-white text-xs">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="casheaFields" class="bg-yellow-50 p-3 rounded-xl border border-yellow-100 space-y-3 hidden">
+                            <p class="text-xs font-bold text-yellow-700 mb-2 uppercase"><i class="fas fa-shopping-bag"></i> Datos Cashea</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Cant. Cuotas</label>
+                                    <input type="number" name="installments" placeholder="Ej. 3" class="w-full border border-yellow-200 rounded-lg p-2 outline-none bg-white">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Nro. Factura</label>
+                                    <input type="text" name="invoice" placeholder="Opcional" class="w-full border border-yellow-200 rounded-lg p-2 outline-none bg-white">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="loanFields" class="bg-red-50 p-3 rounded-xl border border-red-100 space-y-3 hidden">
+                            <p class="text-xs font-bold text-red-700 mb-2 uppercase"><i class="fas fa-percent"></i> Intereses del Préstamo</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Porcentaje (%)</label>
+                                    <input type="number" step="0.1" name="interestRate" placeholder="Ej. 5" class="w-full border border-red-200 rounded-lg p-2 outline-none bg-white">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Período</label>
+                                    <select name="interestPeriod" class="w-full border border-red-200 rounded-lg p-2 outline-none bg-white">
+                                        <option value="mensual">Mensual</option>
+                                        <option value="semanal">Semanal</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl mt-4 transition-colors">Registrar Deuda</button>
+                    </form>
+                `;
+            } else if (window.state.modals.active === 'payDebt') {
+                const debt = window.state.debts.find(d => d.id === window.state.modals.data);
+                if(!debt) return '';
+                title = 'Abonar a Deuda';
+                content = `
+                    <div class="mb-4 p-3 bg-gray-50 border rounded-xl">
+                        <p class="text-sm font-bold text-gray-700">${window.escapeHTML(debt.entity)} - ${window.escapeHTML(debt.description)}</p>
+                        <p class="text-xs text-gray-500 mt-1">Restante: ${window.formatMoney(debt.amount - (debt.paid || 0), debt.currency)}</p>
+                    </div>
+                    <form onsubmit="window.handleFormSubmit(event, 'payDebt')" class="space-y-4">
+                        <input type="hidden" name="debtId" value="${debt.id}">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Monto a Abonar (${debt.currency})</label>
+                            <input type="number" step="0.01" name="amount" required max="${debt.amount - (debt.paid || 0)}" class="w-full border border-gray-300 rounded-xl p-3 outline-none text-lg font-bold text-green-600">
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl mt-2 transition-colors">Confirmar Pago</button>
+                    </form>
+                `;
+            } else if (window.state.modals.active === 'updateIncome') {
+                title = 'Actualizar Ingresos';
+                content = `
+                    <form onsubmit="window.handleFormSubmit(event, 'income')" class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Monto Total</label>
+                                <input type="number" step="0.01" name="amount" value="${window.state.income.amount}" required class="w-full border border-gray-300 rounded-xl p-3 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Moneda</label>
+                                <select name="currency" class="w-full border border-gray-300 rounded-xl p-3 outline-none bg-white">
+                                    <option value="USD" ${window.state.income.currency === 'USD' ? 'selected' : ''}>USD ($)</option>
+                                    <option value="BS" ${window.state.income.currency === 'BS' ? 'selected' : ''}>Bs (VES)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl mt-4 transition-colors">Guardar Ingreso</button>
+                    </form>
+                `;
+            } else if (window.state.modals.active === 'updateBudgets') {
+                title = 'Presupuestos (Límites en USD)';
+                content = `
+                    <form onsubmit="window.handleFormSubmit(event, 'budgets')" class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-emerald-600 mb-1"><i class="fas fa-hamburger"></i> Comida ($)</label>
+                                <input type="number" step="0.01" name="comida" value="${window.state.budgets.comida || 0}" required class="w-full border border-gray-300 rounded-xl p-2 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-blue-600 mb-1"><i class="fas fa-bus"></i> Transporte ($)</label>
+                                <input type="number" step="0.01" name="transporte" value="${window.state.budgets.transporte || 0}" required class="w-full border border-gray-300 rounded-xl p-2 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-purple-600 mb-1"><i class="fas fa-home"></i> Gastos Fijos ($)</label>
+                                <input type="number" step="0.01" name="fijo" value="${window.state.budgets.fijo || 0}" required class="w-full border border-gray-300 rounded-xl p-2 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-orange-600 mb-1"><i class="fas fa-coffee"></i> Hormiga ($)</label>
+                                <input type="number" step="0.01" name="hormiga" value="${window.state.budgets.hormiga || 0}" required class="w-full border border-gray-300 rounded-xl p-2 outline-none">
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-gray-400 leading-tight">Nota: Los presupuestos se establecen en Dólares (USD) para mantener valor frente a la inflación.</p>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl mt-4 transition-colors">Guardar Presupuestos</button>
+                    </form>
+                `;
+            } else if (window.state.modals.active === 'manageUsers') {
+                title = 'Usuarios autorizados';
+                content = `
+                    <div class="space-y-4 max-h-[72vh] overflow-y-auto pr-1">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <button type="button" onclick="window.exportFinancialBackup()" class="border border-gray-300 rounded-xl p-2.5 text-sm font-bold text-gray-700 hover:bg-gray-50"><i class="fas fa-download mr-1"></i> Exportar respaldo</button>
+                            <label class="border border-gray-300 rounded-xl p-2.5 text-sm font-bold text-gray-700 hover:bg-gray-50 text-center cursor-pointer"><i class="fas fa-file-upload mr-1"></i> Importar respaldo antiguo<input type="file" accept="application/json,.json" class="hidden" onchange="window.handleImportBackup(event)"></label>
+                        </div>
+                        <p class="text-[11px] text-gray-500">Por protección contra sobrescritura, el respaldo antiguo solo se importa cuando la nube no contiene información financiera.</p>
+                        <form onsubmit="window.handleUserCreate(event)" class="p-3 bg-blue-50 border border-blue-100 rounded-xl space-y-3">
+                            <p class="text-sm font-bold text-blue-800">Autorizar una persona</p>
+                            <div><label class="block text-xs font-medium text-gray-600 mb-1">Nombre de usuario</label><input name="username" required minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]+" placeholder="ej. maria.g" class="w-full border border-gray-300 rounded-lg p-2 outline-none bg-white"></div>
+                            <div><label class="block text-xs font-medium text-gray-600 mb-1">Permisos</label><select name="role" class="w-full border border-gray-300 rounded-lg p-2 outline-none bg-white"><option value="member">Usuario autorizado</option><option value="admin">Administrador</option></select></div>
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold p-2.5 rounded-lg">Crear cuenta y generar clave temporal</button>
+                            <p class="text-[11px] text-gray-500">La clave temporal se muestra una sola vez y debe cambiarse al primer ingreso. Compártela por un canal privado.</p>
+                        </form>
+                        <div class="space-y-2">
+                            ${window.usersCache.map(u => `
+                                <div class="border border-gray-200 rounded-xl p-3 flex items-center gap-2 justify-between">
+                                    <div class="min-w-0"><div class="font-bold text-sm break-words">${window.escapeHTML(u.username)} ${u.id === undefined ? '' : ''}</div><div class="text-xs text-gray-500">${u.role === 'admin' ? 'Administrador' : 'Usuario'} · ${u.active ? 'Activo' : 'Desactivado'}${u.must_change_password ? ' · Debe cambiar contraseña' : ''}</div></div>
+                                    ${u.id !== undefined ? `<div class="flex flex-col gap-1"><button onclick="window.resetUserPassword(${Number(u.id)}, '${window.escapeHTML(u.username)}')" ${!u.active ? 'disabled' : ''} class="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 disabled:opacity-40">Restablecer clave</button><button onclick="window.toggleUserActive(${Number(u.id)}, ${!u.active})" class="text-xs font-bold px-3 py-1.5 rounded-lg ${u.active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}">${u.active ? 'Desactivar' : 'Activar'}</button></div>` : ''}
+                                </div>`).join('')}
+                        </div>
+                    </div>`;
+            }
+
+            return `
+                <div class="fixed inset-0 bg-slate-900 bg-opacity-60 z-50 flex items-end md:items-center justify-center fade-in backdrop-blur-sm overflow-y-auto">
+                    <div class="bg-white w-full md:w-[450px] rounded-t-3xl md:rounded-3xl p-6 shadow-2xl relative pb-8 md:pb-6 max-h-[90vh] overflow-y-auto">
+                        <button onclick="window.closeModal()" class="absolute top-5 right-5 text-gray-400 hover:text-gray-700 text-xl"><i class="fas fa-times"></i></button>
+                        <h3 class="text-xl font-bold text-gray-800 mb-5 shrink-0">${title}</h3>
+                        ${content}
+                    </div>
+                </div>
+            `;
+        };
+
+        window.handleFormSubmit = (e, type) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+            
+            const uniqueId = Date.now().toString(); // Generar ID único local
+
+            if (type === 'expense') {
+                window.state.expenses.unshift({ // Añadir al principio
+                    id: uniqueId,
+                    amount: parseFloat(data.amount),
+                    currency: data.currency,
+                    category: data.category,
+                    description: data.description,
+                    method: data.method,
+                    bank: data.bank,
+                    date: new Date().toISOString()
+                });
+            } 
+            else if (type === 'debt') {
+                window.state.debts.unshift({
+                    id: uniqueId,
+                    type: data.type,
+                    amount: parseFloat(data.amount),
+                    currency: data.currency,
+                    entity: data.entity,
+                    description: data.description,
+                    paid: 0,
+                    date: new Date().toISOString(),
+                    minPayment: data.minPayment ? parseFloat(data.minPayment) : null,
+                    cutDate: data.cutDate || null,
+                    payBefore: data.payBefore || null,
+                    installments: data.installments ? parseInt(data.installments) : null,
+                    invoice: data.invoice || null,
+                    interestRate: data.interestRate ? parseFloat(data.interestRate) : null,
+                    interestPeriod: data.interestPeriod || null
+                });
+            } 
+            else if (type === 'payDebt') {
+                const debt = window.state.debts.find(d => d.id === data.debtId);
+                if (debt) {
+                    debt.paid = (debt.paid || 0) + parseFloat(data.amount);
+                    // Registrar como gasto para afectar liquidez
+                    window.state.expenses.unshift({
+                        id: uniqueId + '_payment',
+                        amount: parseFloat(data.amount),
+                        currency: debt.currency,
+                        category: 'fijo',
+                        description: `Abono/Pago Deuda: ${debt.entity}`,
+                        method: 'banco',
+                        date: new Date().toISOString()
+                    });
+                }
+            } 
+            else if (type === 'income') {
+                window.state.income = { amount: parseFloat(data.amount), currency: data.currency };
+            } 
+            else if (type === 'budgets') {
+                window.state.budgets = {
+                    comida: parseFloat(data.comida) || 0,
+                    transporte: parseFloat(data.transporte) || 0,
+                    fijo: parseFloat(data.fijo) || 0,
+                    hormiga: parseFloat(data.hormiga) || 0
+                };
+            }
+
+            window.closeModal(); // SaveState se llama al cerrar el modal internamente en otras ramas, pero lo aseguramos aquí:
+            window.saveState();
+        };
+
+        window.deleteDocHandler = (collectionName, docId) => {
+            if(confirm("¿Estás seguro de eliminar este registro permanentemente?")) {
+                window.state[collectionName] = window.state[collectionName].filter(item => item.id !== docId);
+                window.saveState();
+            }
+        };
+
+        // --- INIT ---
+        window.onload = async () => {
+            if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+            try {
+                const status = await fetch('/api/status', { credentials: 'same-origin' });
+                const info = await status.json();
+                window.setupRequired = !!info.setup_required;
+                window.csrfToken = info.csrf_token || null;
+                if (info.authenticated && info.user) {
+                    window.authUser = info.user;
+                    window.state.role = info.user.role === 'admin' ? 'supervisor' : 'deudor';
+                    window.state.view = 'dashboard';
+                    if (!info.user.must_change_password) {
+                        try { await window.refreshSharedState(); }
+                        catch (error) { window.notify(error.message, 'error'); window.clearClientSession(); }
+                        window.state.role = info.user.role === 'admin' ? 'supervisor' : 'deudor';
+                        window.state.view = 'dashboard';
+                    }
+                }
+                if (window.authUser && !window.authUser.must_change_password) await window.offerLegacyDataImport();
+                window.updateUI();
+                if (window.authUser && !window.authUser.must_change_password) window.fetchBCVRate();
+            } catch (error) {
+                window.setupRequired = false;
+                window.authUser = null;
+                window.updateUI();
+                window.notify('No se puede conectar al servidor. Conéctate a internet para iniciar sesión y sincronizar tus datos.', 'error');
+            }
+        };
+        window.addEventListener('online', () => window.syncSharedState());
+
+    </script>
+    
+    <div id="app-root" class="h-full w-full">
+        <!-- Loader inicial rápido -->
+        <div class="flex flex-col items-center justify-center h-full bg-slate-900">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
+            <p class="text-blue-300 font-medium">Iniciando sistema local...</p>
+        </div>
+    </div>
+</body>
+</html>

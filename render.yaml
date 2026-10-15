@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: control-financiero
+    runtime: python
+    plan: free
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 60
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: BOOTSTRAP_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: control-financiero-db
+          property: connectionString
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: RATELIMIT_STORAGE_URI
+        value: memory://
+databases:
+  - name: control-financiero-db
+    plan: basic-256mb
+    databaseName: controlfinanciero
+    user: controlfinanciero
+    ipAllowList: []
+    region: ohio
