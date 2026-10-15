@@ -159,3 +159,10 @@ No borres la base de datos para corregir un monto. Estas funciones permiten ajus
 5. Prueba con dos cuentas: crea un gasto de prueba con cada cuenta y confirma que cada una solo vea el suyo; valida además que el mismo usuario vea sus propios datos tanto en Mac como en Pixel. Después elimina los gastos de prueba.
 
 La verificación completa de API requiere instalar las dependencias de `requirements.txt`. En el entorno de preparación, la sintaxis Python y JavaScript y las instrucciones SQL de migración SQLite se validaron, pero la prueba integral de Flask no pudo ejecutarse porque Flask no estaba instalado.
+
+
+### Corrección del error 500 en `/api/state` (PostgreSQL)
+
+Esta versión incluye una migración de arranque que repara la columna `shared_state.id` en bases PostgreSQL existentes cuando estaba creada como `NOT NULL` sin un `DEFAULT` de secuencia. La migración crea/alinea `shared_state_id_seq`, asigna el valor por encima del ID máximo existente y establece el valor automático de la columna. No borra filas ni reinicia la base de datos.
+
+Al publicar la actualización, Render ejecutará esta migración al iniciar la aplicación. Después, prueba el inicio de sesión con una segunda cuenta y confirma que `/api/state` devuelve HTTP 200. No es necesario borrar usuarios ni recrear PostgreSQL.

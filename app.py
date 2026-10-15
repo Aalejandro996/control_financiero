@@ -167,6 +167,36 @@ def migrate_shared_state_schema() -> None:
     ))
     db.session.commit()
 
+    # Repair legacy PostgreSQL deployments where shared_state.id is NOT NULL
+    # but has no DEFAULT/sequence. db.create_all() does not alter existing
+    # tables, so new private states otherwise fail with NotNullViolation.
+    # Lock the table while creating/aligning the sequence so concurrent Gunicorn
+    # workers running startup migration do not assign overlapping IDs.
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(db.text("LOCK TABLE shared_state IN ACCESS EXCLUSIVE MODE"))
+        db.session.execute(db.text("CREATE SEQUENCE IF NOT EXISTS shared_state_id_seq"))
+        db.session.execute(db.text(
+            "ALTER TABLE shared_state ALTER COLUMN id SET DEFAULT nextval('shared_state_id_seq')"
+        ))
+        db.session.execute(db.text(
+            "ALTER SEQUENCE shared_state_id_seq OWNED BY shared_state.id"
+        ))
+        db.session.execute(db.text("""
+            SELECT setval(
+                'shared_state_id_seq',
+                GREATEST(
+                    COALESCE((SELECT MAX(id)::bigint FROM shared_state), 0),
+                    CASE
+                        WHEN (SELECT is_called FROM shared_state_id_seq)
+                        THEN (SELECT last_value FROM shared_state_id_seq)::bigint
+                        ELSE 0
+                    END
+                ) + 1,
+                false
+            )
+        """))
+        db.session.commit()
+
 
 def audit(action: str, detail: str = "", user_id: int | None = None) -> None:
     try:
