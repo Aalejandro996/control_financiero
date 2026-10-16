@@ -232,3 +232,14 @@ Para que funcionen incluso con la PWA cerrada, hay que configurar claves VAPID y
   ```
 
   Estas comprobaciones validan sintaxis, no sustituyen una prueba integral del servidor y el navegador. Antes de usar datos reales, prueba un pago ficticio y confirma que llega una sola notificación en cada uno de los cuatro días configurados.
+
+
+## Corrección de despliegue: importación de WebAuthn
+
+Si Render falla al arrancar con `ModuleNotFoundError: No module named 'webauthn.helpers.encoders'`, la importación debe ser:
+
+```python
+from webauthn.helpers import bytes_to_base64url
+```
+
+Esta es la ubicación del helper en la API de `webauthn` 2.x. No hace falta cambiar PostgreSQL ni borrar datos; publicar este cambio de código y esperar el siguiente despliegue es suficiente para corregir ese error de importación.

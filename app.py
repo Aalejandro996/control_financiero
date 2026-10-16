@@ -28,7 +28,7 @@ from webauthn import (
     generate_authentication_options, verify_authentication_response,
     options_to_json, base64url_to_bytes,
 )
-from webauthn.helpers.encoders import bytes_to_base64url
+from webauthn.helpers import bytes_to_base64url
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria, AttestationConveyancePreference,
     PublicKeyCredentialDescriptor, ResidentKeyRequirement,
