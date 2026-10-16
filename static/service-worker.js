@@ -1,4 +1,4 @@
-const CACHE_NAME = 'control-financiero-shell-v7';
+const CACHE_NAME = 'control-financiero-shell-v9-payment-reservations';
 const SHELL = ['/', '/static/manifest.webmanifest', '/static/icons/icon-192.png', '/static/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -18,4 +18,47 @@ self.addEventListener('fetch', (event) => {
     }
     return response;
   }).catch(async () => (await caches.match(event.request)) || (await caches.match('/'))));
+});
+
+
+// Push de recordatorios de vencimientos; el service worker puede recibirlos
+// aunque la interfaz de la PWA no esté abierta.
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_error) {
+    payload = { body: event.data ? event.data.text() : '' };
+  }
+  const title = String(payload.title || 'Control Financiero').slice(0, 120);
+  const options = {
+    body: String(payload.body || 'Tienes un pago pendiente. Abre Control Financiero para revisarlo.').slice(0, 240),
+    icon: '/static/icons/icon-192.png',
+    badge: '/static/icons/icon-192.png',
+    tag: String(payload.tag || 'control-financiero-pago').slice(0, 160),
+    renotify: false,
+    data: { url: String(payload.url || '/') }
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  let destination;
+  try {
+    destination = new URL(event.notification.data && event.notification.data.url || '/', self.location.origin);
+    if (destination.origin !== self.location.origin) destination = new URL('/', self.location.origin);
+  } catch (_error) {
+    destination = new URL('/', self.location.origin);
+  }
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
+    for (const client of clientList) {
+      if (new URL(client.url).origin === self.location.origin && 'focus' in client) {
+        try { await client.navigate(destination.href); } catch (_error) { /* Focus is still useful if navigation fails. */ }
+        return client.focus();
+      }
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(destination.href);
+    return undefined;
+  }));
 });

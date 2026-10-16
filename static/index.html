@@ -28,7 +28,7 @@
         // --- GLOBAL STATE & LOCAL STORAGE ---
         // Definimos el estado por defecto si no hay nada guardado
         const defaultState = {
-            view: 'login', // login, dashboard, expenses, debts
+            view: 'login', // login, dashboard, expenses, debts, payments
             role: null, // 'supervisor', 'deudor'
             currency: 'USD', // Global display currency: 'USD' or 'BS'
             exchangeRate: 40.00, // Tasa de respaldo
@@ -503,6 +503,136 @@
             } catch (error) { window.notify(error.message, 'error'); }
         };
 
+        // --- WebAuthn passkeys: biometría mediada por el sistema operativo ---
+        window.base64urlToBuffer = (value) => {
+            const text = String(value).replace(/-/g, '+').replace(/_/g, '/');
+            const base64 = text + '='.repeat((4 - text.length % 4) % 4);
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        };
+        window.bufferToBase64url = (buffer) => {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+        };
+        window.prepareWebAuthnOptions = (options) => {
+            options.challenge = window.base64urlToBuffer(options.challenge);
+            if (options.user && options.user.id) options.user.id = window.base64urlToBuffer(options.user.id);
+            for (const listName of ['allowCredentials', 'excludeCredentials']) {
+                if (Array.isArray(options[listName])) options[listName] = options[listName].map(item => ({ ...item, id: window.base64urlToBuffer(item.id) }));
+            }
+            return options;
+        };
+        window.serializeCredential = (credential) => {
+            const response = credential.response;
+            const payload = { clientDataJSON: window.bufferToBase64url(response.clientDataJSON) };
+            for (const key of ['attestationObject', 'authenticatorData', 'signature', 'userHandle']) {
+                if (response[key]) payload[key] = window.bufferToBase64url(response[key]);
+            }
+            if (typeof response.getTransports === 'function') payload.transports = response.getTransports();
+            return { id: credential.id, rawId: window.bufferToBase64url(credential.rawId), type: credential.type, response: payload, clientExtensionResults: credential.getClientExtensionResults() };
+        };
+        window.loginWithPasskey = async () => {
+            const username = String(document.getElementById('loginUsername')?.value || '').trim();
+            if (!username) { window.notify('Escribe primero tu nombre de usuario y después pulsa el acceso biométrico.', 'info'); document.getElementById('loginUsername')?.focus(); return; }
+            if (!window.PublicKeyCredential || !navigator.credentials?.get) { window.notify('Este navegador no admite passkeys. Usa tu contraseña o actualiza el navegador.', 'error'); return; }
+            try {
+                const start = await window.apiRequest('/api/passkeys/login/options', { method: 'POST', body: JSON.stringify({ username }) });
+                const credential = await navigator.credentials.get({ publicKey: window.prepareWebAuthnOptions(start.options) });
+                const result = await window.apiRequest('/api/passkeys/login/verify', { method: 'POST', body: JSON.stringify({ credential: window.serializeCredential(credential) }) });
+                await window.finishAuthentication(result);
+            } catch (error) { window.notify(error.message || 'No se completó el acceso biométrico.', 'error'); }
+        };
+        window.registerPasskey = async () => {
+            if (!window.authUser || window.authUser.must_change_password) return;
+            if (!window.PublicKeyCredential || !navigator.credentials?.create) { window.notify('Este navegador no admite passkeys. Usa la contraseña.', 'error'); return; }
+            try {
+                const start = await window.apiRequest('/api/passkeys/register/options', { method: 'POST', body: '{}' });
+                const credential = await navigator.credentials.create({ publicKey: window.prepareWebAuthnOptions(start.options) });
+                const suggested = /Pixel/i.test(navigator.userAgent) ? 'Pixel' : /iPhone|iPad/i.test(navigator.userAgent) ? 'iPhone' : /Mac/i.test(navigator.userAgent) ? 'MacBook' : 'Este dispositivo';
+                const label = prompt('Nombre para identificar el dispositivo:', suggested) || suggested;
+                await window.apiRequest('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify({ credential: window.serializeCredential(credential), label }) });
+                window.notify('Acceso con huella, rostro o passkey activado en este dispositivo.', 'success');
+            } catch (error) { window.notify(error.message || 'No se pudo registrar el acceso biométrico.', 'error'); }
+        };
+        window.enablePaymentNotifications = async () => {
+            if (!window.authUser) return;
+            if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) { window.notify('Este navegador no admite notificaciones push. Instala la app o usa un navegador compatible.', 'error'); return; }
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') { window.notify('Permite las notificaciones en la configuración del navegador.', 'info'); return; }
+                const keyResult = await window.apiRequest('/api/push/public-key');
+                const registration = await navigator.serviceWorker.ready;
+                const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: window.base64urlToBuffer(keyResult.public_key) });
+                await window.apiRequest('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: subscription.toJSON() }) });
+                window.notify('Recordatorios de pago habilitados en este dispositivo.', 'success');
+            } catch (error) { window.notify(error.message || 'No se pudieron activar los recordatorios. Puede faltar configurar push en el servidor.', 'error'); }
+        };
+
+        // --- Relación entre la agenda y el saldo real de cada deuda ---
+        // Una programación reserva capacidad, pero NO reduce el saldo real hasta confirmar el pago.
+        window.getDebtOutstandingAmount = (debtOrId) => {
+            const debt = typeof debtOrId === 'object' ? debtOrId : (window.state.debts || []).find(row => String(row.id) === String(debtOrId));
+            if (!debt) return 0;
+            return Math.max(0, Number(debt.amount || 0) - Number(debt.paid || 0));
+        };
+        window.getDebtReservedByPlans = (debtId, excludePlanId = null) =>
+            (window.state.plannedDebtPayments || []).reduce((sum, item) => {
+                if (item.status !== 'planned' || String(item.debtId) !== String(debtId) || (excludePlanId !== null && String(item.id) === String(excludePlanId))) return sum;
+                const amount = Number(item.amount || 0);
+                return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+            }, 0);
+        window.getDebtAvailableToPlan = (debtOrId) => {
+            const debt = typeof debtOrId === 'object' ? debtOrId : (window.state.debts || []).find(row => String(row.id) === String(debtOrId));
+            if (!debt) return 0;
+            return Math.max(0, window.getDebtOutstandingAmount(debt) - window.getDebtReservedByPlans(debt.id));
+        };
+
+        // --- Fechas del planificador sincronizadas con los días de cobro ---
+        window.plannedPaymentDate = (item) => {
+            const explicit = String(item?.scheduledDate || '').slice(0,10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(explicit)) return explicit;
+            const type = item?.scheduleType;
+            if (!['quincena1','quincena2'].includes(type)) return '';
+            const sources = (window.state.incomeSources || []).filter(row => row.frequency === 'quincenal' && Array.isArray(row.payDays) && row.payDays.length >= 2);
+            const days = sources.map(row => row.payDays.map(Number).sort((a,b)=>a-b));
+            const day = days.length ? (type === 'quincena1' ? Math.min(...days.map(x=>x[0])) : Math.max(...days.map(x=>x[1]))) : (type === 'quincena1' ? 15 : 30);
+            const now = new Date(); let year = now.getFullYear(), month = now.getMonth();
+            const lastDay = (y,m) => new Date(y,m+1,0).getDate();
+            let target = new Date(year,month,Math.min(day,lastDay(year,month)));
+            const today = new Date(year,month,now.getDate());
+            if (target < today) { month++; if (month > 11) { month = 0; year++; } target = new Date(year,month,Math.min(day,lastDay(year,month))); }
+            return `${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}-${String(target.getDate()).padStart(2,'0')}`;
+        };
+        window.formatPlanDate = (iso) => { const dateValue = new Date(`${iso}T12:00:00`); return Number.isNaN(dateValue.getTime()) ? 'Fecha pendiente' : dateValue.toLocaleDateString('es-VE',{day:'numeric',month:'short',year:'numeric'}); };
+        window.daysUntilPlanDate = (iso) => { if (!iso) return null; const now = new Date(); now.setHours(0,0,0,0); const due = new Date(`${iso}T00:00:00`); return Math.round((due-now)/86400000); };
+        window.getUpcomingPayments = () => {
+            const items = [];
+            for (const payment of (window.state.plannedDebtPayments || [])) {
+                if (payment.status !== 'planned') continue;
+                const dueDate = window.plannedPaymentDate(payment); if (!dueDate) continue;
+                const debt = (window.state.debts || []).find(row => String(row.id) === String(payment.debtId));
+                items.push({ key:`debt:${payment.id}`, id:payment.id, kind:'debt', label:payment.entity || debt?.entity || 'Deuda', description:payment.description || debt?.description || 'Pago de deuda', amount:Number(payment.amount)||0, currency:payment.currency || debt?.currency || 'USD', dueDate, payment, debt });
+            }
+            for (const expense of (window.state.schoolExpenses || [])) {
+                const dueDate = String(expense.dueDate || '').slice(0,10); if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) continue;
+                const paid = (window.state.schoolPayments || []).filter(item => String(item.expenseId) === String(expense.id)).reduce((total,item)=>total+Number(item.amount||0),0);
+                const remaining = Math.max(0,Number(expense.amount||0)-paid); if (remaining <= 0.01) continue;
+                items.push({key:`school:${expense.id}`, id:expense.id, kind:'school', label:expense.student || 'Colegio', description:expense.description || 'Pago escolar', amount:remaining, currency:expense.currency || 'USD', dueDate, expense});
+            }
+            return items.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+        };
+        window.paymentDateLabel = (iso) => { const days = window.daysUntilPlanDate(iso); if (days === null) return window.formatPlanDate(iso); if (days < 0) return `Vencido hace ${Math.abs(days)} día(s)`; if (days === 0) return 'Vence hoy'; if (days === 1) return 'Mañana'; return `En ${days} días`; };
+        window.renderNextPaymentCard = () => {
+            const item = window.getUpcomingPayments()[0];
+            if (!item) return `<div class="bg-white rounded-2xl border border-dashed border-gray-300 p-4 flex items-center justify-between gap-3"><div><p class="font-bold text-gray-800">Próximo pago planificado</p><p class="text-sm text-gray-500">No tienes pagos próximos registrados.</p></div><button onclick="window.setView('payments')" class="text-blue-700 font-semibold text-sm">Abrir planificador</button></div>`;
+            const days = window.daysUntilPlanDate(item.dueDate);
+            return `<div class="bg-white rounded-2xl border ${days !== null && days <= 1 ? 'border-amber-300' : 'border-blue-100'} p-4 shadow-sm flex items-center justify-between gap-3"><div class="min-w-0"><p class="text-xs uppercase tracking-wide text-gray-500 font-semibold">Próximo pago planificado</p><p class="font-bold text-gray-900 truncate mt-1">${window.escapeHTML(item.label)} · ${window.escapeHTML(item.description)}</p><p class="text-sm ${days !== null && days <= 1 ? 'text-amber-700' : 'text-blue-700'} mt-1">${window.escapeHTML(window.formatPlanDate(item.dueDate))} · ${window.escapeHTML(window.paymentDateLabel(item.dueDate))}</p><p class="text-lg font-bold mt-1">${window.formatMoney(item.amount,item.currency)}</p></div><button onclick="window.setView('payments')" class="shrink-0 rounded-xl bg-blue-600 text-white px-3 py-2 text-sm font-bold">Ver agenda</button></div>`;
+        };
+
         // --- RENDER FUNCTIONS ---
         const renderAuthScreen = () => `
             <div class="min-h-full flex items-center justify-center bg-slate-900 p-4 fade-in overflow-y-auto">
@@ -514,8 +644,9 @@
                         <div><label class="block text-sm font-semibold mb-1" for="loginUsername">Usuario</label><input id="loginUsername" name="username" type="text" autocomplete="username" required minlength="3" maxlength="40" class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
                         <div><label class="block text-sm font-semibold mb-1" for="loginPassword">Contraseña</label><input id="loginPassword" name="password" type="password" autocomplete="current-password" required class="w-full border border-gray-300 rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
                         <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold p-3 rounded-xl">Iniciar sesión</button>
+                        <button type="button" onclick="window.loginWithPasskey()" class="w-full border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold p-3 rounded-xl"><i class="fas fa-fingerprint mr-2"></i>Entrar con huella, rostro o passkey</button>
                     </form>
-                    <p class="text-xs text-gray-400 text-center mt-5">Solo pueden entrar las cuentas autorizadas por el administrador.</p>
+                    <p class="text-xs text-gray-400 text-center mt-5">Solo pueden entrar las cuentas autorizadas. Para usar biometría, regístrala primero dentro de tu cuenta.</p>
                 </div>
             </div>`;
 
@@ -596,6 +727,7 @@
                                     <i class="fas fa-users mr-1"></i><span class="hidden sm:inline">Usuarios</span>
                                 </button>
                             ` : ''}
+                            <button onclick="window.registerPasskey()" title="Configurar acceso con huella o rostro" class="bg-violet-50 hover:bg-violet-100 border border-violet-200 px-3 py-2 rounded-xl text-sm font-bold text-violet-700 transition"><i class="fas fa-fingerprint"></i><span class="hidden lg:inline ml-1">Acceso biométrico</span></button>
                             <button onclick="window.toggleGlobalCurrency()" class="bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-2 rounded-xl text-sm font-bold text-slate-700 transition">
                                 ${window.state.currency === 'USD' ? '<i class="fas fa-dollar-sign mr-1 text-green-600"></i> USD' : '<span class="mr-1 text-blue-600">Bs.</span> VES'}
                             </button>
@@ -612,6 +744,7 @@
                         ${window.state.view === 'debts' ? renderDebts() : ''}
                         ${window.state.view === 'school' ? renderSchool() : ''}
                         ${window.state.view === 'income' ? renderIncome() : ''}
+                        ${window.state.view === 'payments' ? renderPayments() : ''}
                     </main>
 
                     <!-- Bottom Navigation -->
@@ -629,6 +762,9 @@
                         </button>
                         <button onclick="window.setView('school')" class="${window.state.view === 'school' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
                             <i class="fas fa-school text-xl"></i><span class="text-[10px] font-medium">Colegio</span>
+                        </button>
+                        <button onclick="window.setView('payments')" class="${window.state.view === 'payments' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
+                            <i class="fas fa-calendar-check text-xl"></i><span class="text-[10px] font-medium">Pagos</span>
                         </button>
                         <button onclick="window.setView('income')" class="${window.state.view === 'income' ? 'text-blue-600' : 'text-gray-400'} flex flex-col items-center gap-1 transition-colors">
                             <i class="fas fa-wallet text-xl"></i><span class="text-[10px] font-medium">Ingresos</span>
@@ -702,6 +838,8 @@
                             </div>
                         </div>
                     </div>
+
+                    ${window.renderNextPaymentCard()}
 
                     <!-- Estimaciones y Recuperación -->
                     <div class="border rounded-2xl p-5 ${projectionColor} shadow-sm">
@@ -972,10 +1110,11 @@
                                     </div>
                                 </div>
                                 <div class="text-right">
-                                    <div class="text-xs text-gray-500">Restante</div>
+                                    <div class="text-xs text-gray-500">Saldo real restante</div>
                                     <div class="font-bold text-lg ${isPaidOut ? 'text-green-600' : 'text-orange-600'}">
                                         ${window.getDisplayAmount(remainingUSD)}
                                     </div>
+                                    ${window.getDebtReservedByPlans(debt.id) > 0 ? `<div class="text-[11px] text-violet-700 mt-1">En agenda: ${window.formatMoney(window.getDebtReservedByPlans(debt.id), debt.currency)}</div><div class="text-[11px] text-gray-500">Disponible para planificar: ${window.formatMoney(window.getDebtAvailableToPlan(debt.id), debt.currency)}</div>` : ''}
                                 </div>
                             </div>
 
@@ -1023,6 +1162,7 @@
             window.updateUI();
             
             setTimeout(() => {
+                window.toggleScheduleDateField?.();
                 const typeSelect = document.getElementById('debtTypeSelect');
                 if (typeSelect) {
                     typeSelect.addEventListener('change', (e) => {
@@ -1074,6 +1214,40 @@
               <div class="space-y-3">${expenses.length ? expenses.map(e=>{const remaining=Math.max(0,window.convertToUSD(e.amount,e.currency)-paid(e.id));return `<div class="bg-white rounded-xl border p-4"><div class="flex justify-between gap-3"><div><strong>${window.escapeHTML(e.description)}</strong><p class="text-sm text-gray-500">${window.escapeHTML(e.student||'Estudiante')} · ${concepts[e.concept]||'Otro'} · Vence: ${window.escapeHTML(e.dueDate||'Sin fecha')}</p><p class="text-xs text-gray-400">${window.escapeHTML(e.notes||'')}</p></div><div class="text-right"><b>${window.formatMoney(e.amount,e.currency)}</b><p class="text-sm ${remaining>0?'text-orange-600':'text-emerald-600'}">${remaining>0?'Pendiente '+window.getDisplayAmount(remaining):'Pagado'}</p></div></div>${remaining>0?`<button onclick="window.openModal('paySchoolExpense','${e.id}')" class="mt-3 bg-emerald-100 text-emerald-800 rounded-lg px-3 py-2 text-sm font-bold">Registrar pago / abono</button>`:''}</div>`}).join(''):'<div class="bg-white rounded-xl border border-dashed p-8 text-center text-gray-500">Aún no hay gastos escolares registrados.</div>'}</div>
               <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold mb-3">Historial de pagos escolares</h3>${payments.length?payments.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(p=>{const e=expenses.find(x=>String(x.id)===String(p.expenseId));return `<div class="py-2 border-b last:border-0 flex justify-between gap-2 text-sm"><div>${window.escapeHTML(e?.description||'Compromiso escolar')} · ${window.escapeHTML(p.date||'')}<p class="text-xs text-gray-500">${window.escapeHTML(p.method||'')} ${p.reference?'· '+window.escapeHTML(p.reference):''}</p></div><b>${window.formatMoney(p.amount,p.currency)}</b></div>`}).join(''):'<p class="text-sm text-gray-500">Los pagos registrados aparecerán aquí.</p>'}</div>
             </div>`;
+        };
+
+        const renderPayments = () => {
+            const payments = window.getUpcomingPayments();
+            const debtPayments = payments.filter(item => item.kind === 'debt');
+            return `<div class="fade-in max-w-4xl mx-auto space-y-5">
+                <div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-2xl font-bold text-gray-900">Planificador de pagos</h2><p class="text-sm text-gray-500 mt-1">Agenda de deudas y vencimientos del colegio, alineada con tus días de cobro.</p></div><button onclick="window.enablePaymentNotifications()" class="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2.5 text-sm font-bold"><i class="fas fa-bell mr-1"></i> Activar recordatorios</button></div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3"><div class="bg-white border rounded-xl p-3"><p class="text-xs text-gray-500">Pendientes</p><p class="text-2xl font-bold">${payments.length}</p></div><div class="bg-white border rounded-xl p-3"><p class="text-xs text-gray-500">Vencidos</p><p class="text-2xl font-bold text-red-600">${payments.filter(x=>window.daysUntilPlanDate(x.dueDate)<0).length}</p></div><div class="bg-white border rounded-xl p-3"><p class="text-xs text-gray-500">Vencen hoy</p><p class="text-2xl font-bold text-amber-600">${payments.filter(x=>window.daysUntilPlanDate(x.dueDate)===0).length}</p></div><div class="bg-white border rounded-xl p-3"><p class="text-xs text-gray-500">Monto programado</p><p class="text-lg font-bold">${window.getDisplayAmount(debtPayments.reduce((total,item)=>total+window.convertToUSD(item.amount,item.currency),0))}</p></div></div>
+                <div class="bg-blue-50 border border-blue-100 rounded-2xl p-4"><p class="font-bold text-blue-900"><i class="fas fa-bell mr-1"></i> Recordatorios: 7, 4, 1 día y el día de pago</p><p class="text-sm text-blue-800 mt-1">Activa las notificaciones en cada dispositivo. Las alertas aunque la app esté cerrada requieren configurar las claves push y el cron diario en Render.</p></div>
+                <div class="space-y-3">${payments.length ? payments.map(item => {
+                    const days = window.daysUntilPlanDate(item.dueDate); const isDebt = item.kind === 'debt';
+                    return `<article class="bg-white border ${days <= 1 ? 'border-amber-200' : 'border-gray-200'} rounded-2xl p-4 shadow-sm"><div class="flex flex-wrap justify-between gap-3"><div class="min-w-0"><div class="flex items-center gap-2 mb-1"><span class="text-[10px] uppercase font-bold rounded-full px-2 py-1 ${isDebt ? 'bg-violet-100 text-violet-800' : 'bg-blue-100 text-blue-800'}">${isDebt ? 'Deuda' : 'Colegio'}</span><span class="text-xs font-semibold ${days < 0 ? 'text-red-600' : days <= 1 ? 'text-amber-700' : 'text-gray-500'}">${window.escapeHTML(window.paymentDateLabel(item.dueDate))}</span></div><h3 class="font-bold text-gray-900">${window.escapeHTML(item.label)} — ${window.escapeHTML(item.description)}</h3><p class="text-sm text-gray-500 mt-1">Fecha: ${window.escapeHTML(window.formatPlanDate(item.dueDate))}</p></div><div class="text-right"><p class="text-lg font-bold">${window.formatMoney(item.amount,item.currency)}</p><p class="text-xs text-gray-500">${isDebt ? `Vinculado a deuda · saldo real: ${window.formatMoney(item.debt ? window.getDebtOutstandingAmount(item.debt) : 0, item.currency)}` : 'Saldo escolar pendiente'}</p>${isDebt ? '<p class="text-[11px] text-violet-700 mt-1">Se descontará al confirmar el pago</p>' : ''}</div></div><div class="flex flex-wrap gap-2 justify-end mt-4">${isDebt ? `<button onclick="window.markPlannedPaymentPaid('${window.escapeHTML(item.id)}')" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-3 py-2 text-sm font-semibold">Registrar como pagado</button><button onclick="window.cancelPlannedPayment('${window.escapeHTML(item.id)}')" class="border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold">Cancelar plan</button>` : `<button onclick="window.setView('school')" class="border border-blue-200 bg-blue-50 text-blue-800 rounded-lg px-3 py-2 text-sm font-semibold">Ver pago escolar</button>`}</div></article>`;
+                }).join('') : `<div class="text-center py-10 bg-white rounded-2xl border border-dashed"><i class="fas fa-calendar-check text-4xl text-gray-300 mb-3"></i><p class="font-semibold text-gray-700">No hay pagos pendientes planificados.</p><p class="text-sm text-gray-500 mt-1">Entra en Deudas, selecciona Abonar / Pagar y programa una fecha.</p><button onclick="window.setView('debts')" class="mt-4 bg-blue-600 text-white rounded-xl px-4 py-2 font-bold">Ir a Deudas</button></div>`}</div>
+                <div class="bg-white border rounded-2xl p-4"><h3 class="font-bold text-gray-800 mb-2">Pagos por quincena</h3><p class="text-sm text-gray-600">La programación toma los días quincenales que configuraste en Ingresos y guarda una fecha concreta. Una programación no reduce la deuda hasta que confirmes el pago real.</p></div>
+            </div>`;
+        };
+
+        window.markPlannedPaymentPaid = (id) => {
+            const plan = (window.state.plannedDebtPayments||[]).find(row=>String(row.id)===String(id) && row.status==='planned');
+            if (!plan) return;
+            const debt = (window.state.debts||[]).find(row=>String(row.id)===String(plan.debtId));
+            if (!debt) { window.notify('La deuda asociada ya no existe. Revisa o cancela esta programación.', 'error'); return; }
+            const amount = Number(plan.amount)||0, balance = Math.max(0,Number(debt.amount||0)-Number(debt.paid||0));
+            if (amount <= 0 || amount > balance + 0.01) { window.notify('El monto planificado supera el saldo actual. Revisa la deuda antes de confirmar.', 'error'); return; }
+            if (!confirm(`¿Confirmas que ya pagaste ${window.formatMoney(amount,plan.currency)} a ${plan.entity||debt.entity}?`)) return;
+            debt.paid = Math.min(Number(debt.amount),Number(debt.paid||0)+amount);
+            if (debt.type === 'tdc') { debt.lastMinimumPaymentDate = new Date().toISOString().slice(0,10); debt.minimumPaidThisCycle = plan.paymentChoice === 'minimum' || amount >= Number(debt.minPayment||0); debt.lastPaymentChoice = plan.paymentChoice || 'custom'; }
+            window.state.expenses.unshift({id:`${plan.id}_paid_${Date.now()}`,amount,currency:plan.currency,category:'fijo',description:`Pago planificado: ${plan.entity||debt.entity}`,method:'banco',bank:'',date:new Date().toISOString()});
+            plan.status = 'paid'; plan.paidAt = new Date().toISOString(); window.saveState(); window.notify('Pago registrado y agregado a tus gastos.', 'success');
+        };
+        window.cancelPlannedPayment = (id) => {
+            const plan = (window.state.plannedDebtPayments||[]).find(row=>String(row.id)===String(id) && row.status==='planned');
+            if (!plan || !confirm('¿Cancelar esta programación? La deuda no se marcará como pagada.')) return;
+            plan.status='cancelled'; window.saveState(); window.notify('Programación cancelada.', 'success');
         };
 
         const renderModal = () => {
@@ -1222,7 +1396,9 @@
                 content = `
                     <div class="mb-4 p-3 bg-gray-50 border rounded-xl">
                         <p class="text-sm font-bold text-gray-700">${window.escapeHTML(debt.entity)} - ${window.escapeHTML(debt.description)}</p>
-                        <p class="text-xs text-gray-500 mt-1">Restante: ${window.formatMoney(debt.amount - (debt.paid || 0), debt.currency)}</p>
+                        <p class="text-xs text-gray-600 mt-1">Saldo real restante: ${window.formatMoney(window.getDebtOutstandingAmount(debt), debt.currency)}</p>
+                        <p class="text-xs text-violet-700 mt-1">Ya reservado en otros planes: ${window.formatMoney(window.getDebtReservedByPlans(debt.id), debt.currency)}</p>
+                        <p class="text-xs text-emerald-700 mt-1 font-semibold">Disponible para otro pago/plan: ${window.formatMoney(window.getDebtAvailableToPlan(debt.id), debt.currency)}</p>
                     </div>
                     <form onsubmit="window.handleFormSubmit(event, 'payDebt')" class="space-y-4">
                         <input type="hidden" name="debtId" value="${debt.id}">
@@ -1231,24 +1407,25 @@
                             <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de pago de tarjeta</label>
                             <select name="paymentChoice" id="cardPaymentChoice" required onchange="window.updateDebtPaymentAmount('${debt.id}')" class="w-full border border-gray-300 rounded-xl p-3 bg-white">
                                 <option value="minimum">Monto mínimo (${window.formatMoney(Number(debt.minPayment || 0), debt.currency)})</option>
-                                <option value="total">Monto total restante (${window.formatMoney(Math.max(0, Number(debt.amount) - Number(debt.paid || 0)), debt.currency)})</option>
+                                <option value="total">Saldo disponible tras otros planes (${window.formatMoney(window.getDebtAvailableToPlan(debt.id), debt.currency)})</option>
                                 <option value="custom">Monto personalizado</option>
                             </select>
-                        </div>` : `
+                        </div>` : ''}
                         <div>
-                            <label class="block text-xs font-medium text-gray-500 mb-1">Programar pago</label>
-                            <select name="scheduleType" class="w-full border border-gray-300 rounded-xl p-3 bg-white">
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Acción</label>
+                            <select name="scheduleType" id="paymentScheduleType" onchange="window.toggleScheduleDateField()" class="w-full border border-gray-300 rounded-xl p-3 bg-white">
                                 <option value="now">Registrar pago realizado</option>
-                                <option value="quincena1">Planificar para la primera quincena</option>
-                                <option value="quincena2">Planificar para la segunda quincena</option>
-                                <option value="date">Fecha específica</option>
+                                <option value="quincena1">Planificar en la primera quincena</option>
+                                <option value="quincena2">Planificar en la segunda quincena</option>
+                                <option value="date">Planificar para una fecha específica</option>
                             </select>
                             <label class="block text-xs font-medium text-gray-500 mt-2 mb-1">Fecha específica (si aplica)</label>
-                            <input type="date" name="scheduledDate" class="w-full border border-gray-300 rounded-xl p-2">
-                        </div>`}
+                            <input type="date" id="paymentScheduledDate" name="scheduledDate" value="${debt.type === 'tdc' ? window.escapeHTML(debt.payBefore||'') : ''}" class="w-full border border-gray-300 rounded-xl p-2">
+                            <p class="text-xs text-gray-500 mt-1">Este pago queda vinculado a la deuda. La agenda reserva el monto para evitar planificarlo dos veces; el saldo real solo baja cuando confirmes el pago.</p>
+                        </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-500 mb-1">Monto a Abonar (${debt.currency})</label>
-                            <input id="debtPaymentAmount" type="number" step="0.01" min="0.01" name="amount" required max="${Math.max(0, Number(debt.amount) - Number(debt.paid || 0))}" value="${debt.type === 'tdc' ? Math.min(Number(debt.minPayment || 0), Math.max(0, Number(debt.amount) - Number(debt.paid || 0))) : ''}" class="w-full border border-gray-300 rounded-xl p-3 outline-none text-lg font-bold text-green-600">
+                            <input id="debtPaymentAmount" type="number" step="0.01" min="0.01" name="amount" required max="${window.getDebtAvailableToPlan(debt.id)}" value="${debt.type === 'tdc' ? Math.min(Number(debt.minPayment || 0), window.getDebtAvailableToPlan(debt.id)) : ''}" class="w-full border border-gray-300 rounded-xl p-3 outline-none text-lg font-bold text-green-600">
                             <p class="text-xs text-gray-500 mt-1">Un pago planificado no se registrará como pagado hasta que confirmes el pago real.</p>
                         </div>
                         <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl mt-2 transition-colors">Confirmar / Planificar</button>
@@ -1419,13 +1596,14 @@
         };
 
         window.updateDebtPaymentAmount = (debtId) => {
-            const debt = (window.state.debts || []).find(d => d.id === debtId);
+            const debt = (window.state.debts || []).find(d => String(d.id) === String(debtId));
             const choice = document.getElementById('cardPaymentChoice')?.value;
             const amountInput = document.getElementById('debtPaymentAmount');
             if (!debt || !amountInput) return;
-            const remaining = Math.max(0, Number(debt.amount || 0) - Number(debt.paid || 0));
-            if (choice === 'minimum') amountInput.value = Math.min(Number(debt.minPayment || 0), remaining).toFixed(2);
-            else if (choice === 'total') amountInput.value = remaining.toFixed(2);
+            const available = window.getDebtAvailableToPlan(debt.id);
+            amountInput.max = available.toFixed(2);
+            if (choice === 'minimum') amountInput.value = Math.min(Number(debt.minPayment || 0), available).toFixed(2);
+            else if (choice === 'total') amountInput.value = available.toFixed(2);
             else amountInput.value = '';
         };
 
@@ -1491,29 +1669,35 @@
             else if (type === 'payDebt') {
                 const debt = window.state.debts.find(d => d.id === data.debtId);
                 if (debt) {
-                    const isScheduled = debt.type !== 'tdc' && data.scheduleType && data.scheduleType !== 'now';
+                    const paymentAmount = Number(data.amount);
+                    const balance = window.getDebtOutstandingAmount(debt);
+                    const reservedByOtherPlans = window.getDebtReservedByPlans(debt.id);
+                    const availableToPlan = Math.max(0, balance - reservedByOtherPlans);
+                    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0 || paymentAmount > balance + 0.01) { window.showToast('El monto debe ser mayor que cero y no superar el saldo real restante.', 'error'); return; }
+                    const scheduleType = data.scheduleType || 'now';
+                    const isScheduled = scheduleType !== 'now';
+                    if (paymentAmount > availableToPlan + 0.01) {
+                        window.showToast(`Ya tienes ${window.formatMoney(reservedByOtherPlans, debt.currency)} reservado en otros planes. Cancela o ajusta una programación para no comprometer más del saldo restante.`, 'error');
+                        return;
+                    }
+                    let scheduledDate = '';
                     if (isScheduled) {
+                        if (scheduleType === 'date') {
+                            scheduledDate = String(data.scheduledDate||'').slice(0,10);
+                            const localNow = new Date(); const todayIso = `${localNow.getFullYear()}-${String(localNow.getMonth()+1).padStart(2,'0')}-${String(localNow.getDate()).padStart(2,'0')}`;
+                            if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate) || scheduledDate < todayIso) { window.showToast('Selecciona una fecha válida igual o posterior a hoy.', 'error'); return; }
+                        } else scheduledDate = window.plannedPaymentDate({ scheduleType, scheduledDate: '' });
+                        if (!scheduledDate) { window.showToast('No se pudo calcular la fecha del pago. Revisa los días de cobro en Ingresos.', 'error'); return; }
                         window.state.plannedDebtPayments = window.state.plannedDebtPayments || [];
-                        const scheduledDate = data.scheduleType === 'date' ? data.scheduledDate : '';
-                        window.state.plannedDebtPayments.unshift({
-                            id: uniqueId, debtId: debt.id, entity: debt.entity, description: debt.description,
-                            amount: parseFloat(data.amount), currency: debt.currency,
-                            scheduleType: data.scheduleType, scheduledDate,
-                            status: 'planned', createdAt: new Date().toISOString()
-                        });
+                        window.state.plannedDebtPayments.unshift({ id: uniqueId, debtId: debt.id, entity: debt.entity, description: debt.description, amount: paymentAmount, currency: debt.currency, scheduleType, scheduledDate, paymentChoice: data.paymentChoice || 'custom', status: 'planned', createdAt: new Date().toISOString() });
                     } else {
-                        const paymentAmount = parseFloat(data.amount);
                         debt.paid = (debt.paid || 0) + paymentAmount;
                         if (debt.type === 'tdc') {
                             debt.lastMinimumPaymentDate = new Date().toISOString().slice(0,10);
                             debt.minimumPaidThisCycle = data.paymentChoice === 'minimum' || paymentAmount >= Number(debt.minPayment || 0);
                             debt.lastPaymentChoice = data.paymentChoice || 'custom';
                         }
-                        window.state.expenses.unshift({
-                            id: uniqueId + '_payment', amount: paymentAmount, currency: debt.currency,
-                            category: 'fijo', description: `Abono/Pago Deuda: ${debt.entity}`,
-                            method: 'banco', date: new Date().toISOString()
-                        });
+                        window.state.expenses.unshift({ id: uniqueId + '_payment', amount: paymentAmount, currency: debt.currency, category: 'fijo', description: `Abono/Pago Deuda: ${debt.entity}`, method: 'banco', date: new Date().toISOString() });
                     }
                 }
             } 
@@ -1588,8 +1772,22 @@
         };
 
         window.deleteDocHandler = (collectionName, docId) => {
-            if(confirm("¿Estás seguro de eliminar este registro permanentemente?")) {
-                window.state[collectionName] = window.state[collectionName].filter(item => item.id !== docId);
+            const linkedPlans = collectionName === 'debts'
+                ? (window.state.plannedDebtPayments || []).filter(item => String(item.debtId) === String(docId) && item.status === 'planned')
+                : [];
+            const baseMessage = "¿Estás seguro de eliminar este registro permanentemente?";
+            const extraMessage = linkedPlans.length ? `
+
+Esta deuda tiene ${linkedPlans.length} pago(s) planificado(s). También se cancelarán para evitar que queden programaciones huérfanas.` : '';
+            if(confirm(baseMessage + extraMessage)) {
+                window.state[collectionName] = window.state[collectionName].filter(item => String(item.id) !== String(docId));
+                if (linkedPlans.length) {
+                    window.state.plannedDebtPayments = (window.state.plannedDebtPayments || []).map(item =>
+                        String(item.debtId) === String(docId) && item.status === 'planned'
+                            ? { ...item, status: 'cancelled', cancelledAt: new Date().toISOString() }
+                            : item
+                    );
+                }
                 window.saveState();
             }
         };

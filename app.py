@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import copy
 import hmac
+import json
 import math
 import os
 import re
 import secrets
 import string
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 from functools import wraps
 from pathlib import Path
 
@@ -20,6 +23,17 @@ from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
+from webauthn import (
+    generate_registration_options, verify_registration_response,
+    generate_authentication_options, verify_authentication_response,
+    options_to_json, base64url_to_bytes,
+)
+from webauthn.helpers.encoders import bytes_to_base64url
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria, AttestationConveyancePreference,
+    PublicKeyCredentialDescriptor, ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -100,6 +114,38 @@ class AuditEvent(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class UserPasskey(db.Model):
+    """Public WebAuthn credential registered by one private account."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True)
+    credential_id = db.Column(db.String(1024), nullable=False, unique=True)
+    public_key = db.Column(db.Text, nullable=False)
+    sign_count = db.Column(db.BigInteger, nullable=False, default=0)
+    label = db.Column(db.String(80), nullable=False, default="Este dispositivo")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class PushSubscription(db.Model):
+    """Browser push endpoint scoped to the account that opted in."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint = db.Column(db.String(2048), nullable=False, unique=True)
+    subscription_json = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ReminderDelivery(db.Model):
+    """Deduplication ledger: one reminder per payment/date/lead time/account."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    payment_key = db.Column(db.String(140), nullable=False)
+    due_date = db.Column(db.String(10), nullable=False)
+    days_before = db.Column(db.Integer, nullable=False)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (db.UniqueConstraint("user_id", "payment_key", "due_date", "days_before", name="uq_reminder_delivery"),)
+
+
 def ensure_user_state(user_id: int) -> SharedState:
     """Return only this account's private financial state, creating it if needed."""
     record = SharedState.query.filter_by(user_id=user_id).first()
@@ -166,36 +212,6 @@ def migrate_shared_state_schema() -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_shared_state_user_id ON shared_state (user_id)"
     ))
     db.session.commit()
-
-    # Repair legacy PostgreSQL deployments where shared_state.id is NOT NULL
-    # but has no DEFAULT/sequence. db.create_all() does not alter existing
-    # tables, so new private states otherwise fail with NotNullViolation.
-    # Lock the table while creating/aligning the sequence so concurrent Gunicorn
-    # workers running startup migration do not assign overlapping IDs.
-    if db.engine.dialect.name == "postgresql":
-        db.session.execute(db.text("LOCK TABLE shared_state IN ACCESS EXCLUSIVE MODE"))
-        db.session.execute(db.text("CREATE SEQUENCE IF NOT EXISTS shared_state_id_seq"))
-        db.session.execute(db.text(
-            "ALTER TABLE shared_state ALTER COLUMN id SET DEFAULT nextval('shared_state_id_seq')"
-        ))
-        db.session.execute(db.text(
-            "ALTER SEQUENCE shared_state_id_seq OWNED BY shared_state.id"
-        ))
-        db.session.execute(db.text("""
-            SELECT setval(
-                'shared_state_id_seq',
-                GREATEST(
-                    COALESCE((SELECT MAX(id)::bigint FROM shared_state), 0),
-                    CASE
-                        WHEN (SELECT is_called FROM shared_state_id_seq)
-                        THEN (SELECT last_value FROM shared_state_id_seq)::bigint
-                        ELSE 0
-                    END
-                ) + 1,
-                false
-            )
-        """))
-        db.session.commit()
 
 
 def audit(action: str, detail: str = "", user_id: int | None = None) -> None:
@@ -503,9 +519,68 @@ def normalize_shared_data(value) -> dict:
             "scheduledDate": str(row.get("scheduledDate") or "")[:40],
             "status": row.get("status") if row.get("status") in valid_statuses else "planned",
             "createdAt": str(row.get("createdAt") or "")[:40],
+            "paidAt": str(row.get("paidAt") or "")[:40],
+            "paymentChoice": row.get("paymentChoice") if row.get("paymentChoice") in {"minimum", "total", "custom"} else "custom",
         })
     result["plannedDebtPayments"] = planned_rows
     return result
+
+
+def resolve_planned_due_date(item: dict, data: dict, today: date | None = None) -> date | None:
+    """Resolve an explicit scheduled date or align a quincena with configured income days."""
+    try:
+        today = today or datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "America/Caracas"))).date()
+    except Exception:
+        today = today or datetime.now(timezone.utc).date()
+    raw_date = str(item.get("scheduledDate") or "")[:10]
+    if raw_date:
+        try:
+            return date.fromisoformat(raw_date)
+        except ValueError:
+            return None
+    schedule_type = item.get("scheduleType")
+    if schedule_type not in {"quincena1", "quincena2"}:
+        return None
+    pay_days = []
+    for source in (data.get("incomeSources", []) if isinstance(data, dict) else []):
+        if isinstance(source, dict) and source.get("frequency") == "quincenal":
+            days = source.get("payDays") or []
+            if isinstance(days, list) and len(days) >= 2:
+                try:
+                    pay_days.append(sorted(max(1, min(31, int(day))) for day in days[:2]))
+                except (TypeError, ValueError):
+                    pass
+    if pay_days:
+        pay_day = min(pair[0] for pair in pay_days) if schedule_type == "quincena1" else max(pair[1] for pair in pay_days)
+    else:
+        pay_day = 15 if schedule_type == "quincena1" else 30
+    import calendar
+    year, month = today.year, today.month
+    candidate = date(year, month, min(pay_day, calendar.monthrange(year, month)[1]))
+    if candidate < today:
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+        candidate = date(year, month, min(pay_day, calendar.monthrange(year, month)[1]))
+    return candidate
+
+
+def webauthn_settings() -> tuple[str, str]:
+    origin = (os.getenv("APP_PUBLIC_ORIGIN") or request.host_url.rstrip("/")).rstrip("/")
+    parsed = urlsplit(origin)
+    rp_id = os.getenv("WEBAUTHN_RP_ID") or parsed.hostname
+    if not parsed.scheme or not parsed.hostname or not rp_id:
+        raise ValueError("Configura APP_PUBLIC_ORIGIN y WEBAUTHN_RP_ID para usar acceso biométrico.")
+    return rp_id, origin
+
+
+def establish_user_session(user: User) -> dict:
+    session.clear()
+    session["uid"] = user.id
+    session["csrf_token"] = secrets.token_urlsafe(32)
+    session.permanent = True
+    audit("passkey_login_succeeded", "Inicio de sesión mediante passkey", user.id)
+    return {"ok": True, "csrf_token": session["csrf_token"], "user": {"username": user.username, "role": user.role, "must_change_password": user.must_change_password}}
 
 
 def validate_school_balances(data: dict) -> str | None:
@@ -616,85 +691,6 @@ def healthz():
         return jsonify(ok=False), 503
 
 
-@app.get("/__recovery/users")
-@limiter.limit("5 per minute")
-def temporary_user_recovery():
-    """Temporary, token-protected read-only user inventory for recovery.
-
-    Returns account metadata only. Never returns password hashes or financial data.
-    Remove this endpoint after restoring access.
-    """
-    expected = os.getenv("RECOVERY_TOKEN", "")
-    supplied = request.headers.get("X-Recovery-Token", "")
-    if len(expected) < 32 or not supplied or not hmac.compare_digest(supplied, expected):
-        # Avoid advertising the temporary endpoint to unauthenticated callers.
-        return jsonify(error="Not found"), 404
-    try:
-        users = User.query.order_by(User.id.asc()).all()
-        states = SharedState.query.all()
-        state_by_user = {state.user_id: state for state in states if state.user_id is not None}
-        return jsonify(
-            count=len(users),
-            users=[{
-                "id": user.id,
-                "username": user.username,
-                "role": user.role,
-                "active": user.active,
-                "must_change_password": user.must_change_password,
-                "created_at": user.created_at.isoformat() if user.created_at else None,
-                "has_financial_state": user.id in state_by_user,
-                "state_revision": state_by_user[user.id].revision if user.id in state_by_user else None,
-            } for user in users],
-        )
-    except Exception:
-        app.logger.exception("Error consultando usuarios para recuperación temporal")
-        db.session.rollback()
-        return jsonify(error="No se pudo consultar la lista. Revisa los logs de Render."), 500
-
-
-@app.post("/__recovery/reset-password/amunoz")
-@limiter.limit("3 per hour")
-def temporary_reset_amunoz_password():
-    """Temporary emergency reset for the named original admin only.
-
-    The endpoint is gated by a separately configured long recovery token,
-    returns a random temporary password once, and forces a password change.
-    Remove this endpoint and RECOVERY_TOKEN after access is restored.
-    """
-    expected = os.getenv("RECOVERY_TOKEN", "")
-    supplied = request.headers.get("X-Recovery-Token", "")
-    if len(expected) < 32 or not supplied or not hmac.compare_digest(supplied, expected):
-        return jsonify(error="Not found"), 404
-
-    user = User.query.filter_by(username="amunoz", role="admin", active=True).first()
-    if user is None:
-        return jsonify(error="La cuenta administradora amunoz no está disponible."), 404
-
-    # Token-url-safe random password; the browser will force the owner to change it.
-    temporary_password = secrets.token_urlsafe(24)
-    user.password_hash = generate_password_hash(temporary_password)
-    user.must_change_password = True
-    try:
-        db.session.commit()
-        audit("password_reset_via_recovery", "Restablecimiento temporal para amunoz", user.id)
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Falló el restablecimiento temporal de contraseña")
-        return jsonify(error="No se pudo restablecer la contraseña. Revisa los logs de Render."), 500
-
-    response = jsonify(
-        ok=True,
-        username=user.username,
-        temporary_password=temporary_password,
-        must_change_password=True,
-        message="Inicia sesión con esta contraseña temporal y cámbiala inmediatamente. Retira luego RECOVERY_TOKEN y los endpoints temporales."
-    )
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
-    return response
-
-
 @app.get("/api/status")
 def status():
     required = setup_required()
@@ -762,6 +758,201 @@ def login():
     session.permanent = True
     audit("login_succeeded", "Inicio de sesión correcto", user.id)
     return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password})
+
+
+@app.get("/api/passkeys/status")
+@require_auth()
+def passkeys_status():
+    credentials = UserPasskey.query.filter_by(user_id=g.user.id).order_by(UserPasskey.created_at.asc()).all()
+    return jsonify(available=True, credentials=[{"id": item.id, "label": item.label, "created_at": item.created_at.isoformat()} for item in credentials])
+
+
+@app.post("/api/passkeys/register/options")
+@limiter.limit("5 per hour")
+@require_auth()
+def passkey_registration_options():
+    if g.user.must_change_password:
+        return jsonify(error="Cambia primero la contraseña temporal."), 428
+    try:
+        rp_id, _origin = webauthn_settings()
+        existing = UserPasskey.query.filter_by(user_id=g.user.id).all()
+        options = generate_registration_options(
+            rp_id=rp_id, rp_name="Control Financiero",
+            user_id=str(g.user.id).encode("utf-8"),
+            user_name=g.user.username, user_display_name=g.user.username,
+            attestation=AttestationConveyancePreference.NONE,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.PREFERRED,
+                user_verification=UserVerificationRequirement.REQUIRED,
+            ),
+            exclude_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(item.credential_id)) for item in existing],
+        )
+        session["passkey_register_challenge"] = bytes_to_base64url(options.challenge)
+        session["passkey_register_user_id"] = g.user.id
+        return jsonify(options=json.loads(options_to_json(options)))
+    except Exception:
+        app.logger.exception("No se pudieron generar opciones de registro WebAuthn")
+        return jsonify(error="No se pudo iniciar la configuración biométrica. Verifica el origen HTTPS de la aplicación."), 503
+
+
+@app.post("/api/passkeys/register/verify")
+@limiter.limit("5 per hour")
+@require_auth()
+def passkey_registration_verify():
+    if session.get("passkey_register_user_id") != g.user.id:
+        return jsonify(error="La solicitud de registro venció. Inténtalo otra vez."), 400
+    challenge_text = session.pop("passkey_register_challenge", None)
+    session.pop("passkey_register_user_id", None)
+    body = request.get_json(silent=True) or {}
+    credential = body.get("credential")
+    if not challenge_text or not isinstance(credential, dict):
+        return jsonify(error="Falta la credencial de seguridad o el reto venció."), 400
+    try:
+        rp_id, origin = webauthn_settings()
+        verification = verify_registration_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge_text),
+            expected_rp_id=rp_id, expected_origin=origin,
+            require_user_verification=True,
+        )
+        credential_id = bytes_to_base64url(verification.credential_id)
+        existing = UserPasskey.query.filter_by(credential_id=credential_id).first()
+        if existing and existing.user_id != g.user.id:
+            return jsonify(error="Esta credencial ya está asociada a otra cuenta."), 409
+        if existing:
+            existing.public_key = bytes_to_base64url(verification.credential_public_key)
+            existing.sign_count = int(verification.sign_count or 0)
+            existing.label = str(body.get("label") or existing.label or "Este dispositivo")[:80]
+        else:
+            db.session.add(UserPasskey(
+                user_id=g.user.id, credential_id=credential_id,
+                public_key=bytes_to_base64url(verification.credential_public_key),
+                sign_count=int(verification.sign_count or 0),
+                label=str(body.get("label") or "Este dispositivo")[:80],
+            ))
+        db.session.commit()
+        audit("passkey_registered", "Acceso biométrico registrado", g.user.id)
+        return jsonify(ok=True, message="Acceso biométrico configurado en este dispositivo.")
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Falló la verificación de registro WebAuthn para usuario %s", g.user.id)
+        return jsonify(error="No se pudo verificar el registro biométrico. Vuelve a intentarlo."), 400
+
+
+@app.delete("/api/passkeys/<int:credential_id>")
+@require_auth()
+def passkey_delete(credential_id: int):
+    item = UserPasskey.query.filter_by(id=credential_id, user_id=g.user.id).first()
+    if item is None:
+        return jsonify(error="Credencial no encontrada para esta cuenta."), 404
+    db.session.delete(item)
+    db.session.commit()
+    audit("passkey_removed", "Acceso biométrico eliminado", g.user.id)
+    return jsonify(ok=True)
+
+
+@app.post("/api/passkeys/login/options")
+@limiter.limit("10 per minute")
+def passkey_login_options():
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username", "")).strip().lower()
+    user = User.query.filter_by(username=username, active=True).first()
+    if not user or user.must_change_password:
+        return jsonify(error="Inicia sesión con tu contraseña para terminar la configuración de la cuenta."), 401
+    credentials = UserPasskey.query.filter_by(user_id=user.id).all()
+    if not credentials:
+        return jsonify(error="Esta cuenta aún no tiene acceso biométrico registrado. Entra con contraseña y actívalo desde la aplicación."), 404
+    try:
+        rp_id, _origin = webauthn_settings()
+        options = generate_authentication_options(
+            rp_id=rp_id,
+            allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(item.credential_id)) for item in credentials],
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
+        session["passkey_login_challenge"] = bytes_to_base64url(options.challenge)
+        session["passkey_login_user_id"] = user.id
+        return jsonify(options=json.loads(options_to_json(options)))
+    except Exception:
+        app.logger.exception("No se pudieron generar opciones de autenticación WebAuthn")
+        return jsonify(error="No se pudo iniciar el acceso biométrico. Verifica la configuración HTTPS."), 503
+
+
+@app.post("/api/passkeys/login/verify")
+@limiter.limit("10 per minute")
+def passkey_login_verify():
+    challenge_text = session.pop("passkey_login_challenge", None)
+    user_id = session.pop("passkey_login_user_id", None)
+    body = request.get_json(silent=True) or {}
+    credential = body.get("credential")
+    if not challenge_text or not user_id or not isinstance(credential, dict):
+        return jsonify(error="La solicitud biométrica venció. Vuelve a intentarlo."), 400
+    credential_id = str(credential.get("rawId") or credential.get("id") or "")
+    passkey = UserPasskey.query.filter_by(user_id=user_id, credential_id=credential_id).first()
+    user = db.session.get(User, user_id)
+    if not passkey or not user or not user.active or user.must_change_password:
+        return jsonify(error="No se pudo validar la credencial para esta cuenta."), 401
+    try:
+        rp_id, origin = webauthn_settings()
+        verification = verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge_text),
+            expected_rp_id=rp_id, expected_origin=origin,
+            credential_public_key=base64url_to_bytes(passkey.public_key),
+            credential_current_sign_count=int(passkey.sign_count or 0),
+            require_user_verification=True,
+        )
+        passkey.sign_count = int(verification.new_sign_count or 0)
+        db.session.commit()
+        return jsonify(establish_user_session(user))
+    except Exception:
+        db.session.rollback()
+        app.logger.warning("Falló autenticación WebAuthn", exc_info=True)
+        return jsonify(error="No se pudo verificar la huella, rostro o passkey. Usa contraseña o vuelve a intentarlo."), 401
+
+
+@app.get("/api/push/public-key")
+def push_public_key():
+    key = os.getenv("VAPID_PUBLIC_KEY", "").strip()
+    if not key:
+        return jsonify(error="Las notificaciones push aún no están configuradas en el servidor."), 503
+    return jsonify(public_key=key)
+
+
+@app.post("/api/push/subscribe")
+@require_auth()
+def push_subscribe():
+    body = request.get_json(silent=True) or {}
+    subscription = body.get("subscription")
+    if not isinstance(subscription, dict):
+        return jsonify(error="La suscripción de notificaciones no es válida."), 400
+    endpoint = str(subscription.get("endpoint") or "")
+    keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+    if not endpoint.startswith("https://") or len(endpoint) > 2048 or not keys.get("p256dh") or not keys.get("auth"):
+        return jsonify(error="El navegador no entregó una suscripción push válida."), 400
+    record = PushSubscription.query.filter_by(endpoint=endpoint).first()
+    if record is None:
+        record = PushSubscription(user_id=g.user.id, endpoint=endpoint, subscription_json=subscription)
+        db.session.add(record)
+    else:
+        record.user_id = g.user.id
+        record.subscription_json = subscription
+    db.session.commit()
+    audit("payment_push_enabled", "Recordatorios push habilitados en un dispositivo", g.user.id)
+    return jsonify(ok=True, message="Recordatorios habilitados para este dispositivo.")
+
+
+@app.delete("/api/push/subscribe")
+@require_auth()
+def push_unsubscribe():
+    body = request.get_json(silent=True) or {}
+    endpoint = str(body.get("endpoint") or "")
+    if not endpoint:
+        return jsonify(error="Falta el endpoint del dispositivo."), 400
+    record = PushSubscription.query.filter_by(endpoint=endpoint, user_id=g.user.id).first()
+    if record:
+        db.session.delete(record)
+        db.session.commit()
+    return jsonify(ok=True)
 
 
 @app.post("/api/logout")
