@@ -128,7 +128,7 @@ node tests/debt_plan_test.js
 - Para deudas distintas de tarjeta se puede registrar un pago realizado o planificarlo para primera/segunda quincena o una fecha específica. Los pagos planificados se guardan separados y no se descuentan del saldo hasta registrar el pago real.
 - Los pagos reales continúan afectando el saldo de la deuda y se reflejan como gastos. Los pagos programados se guardan en el espacio privado de la cuenta y se sincronizan entre sus dispositivos.
 - La fecha de corte y fecha límite de pago son recordatorios ingresados por el usuario; esta versión no consulta el banco ni puede detectar automáticamente un pago bancario. Después de registrar un pago mínimo, revisa el estado de cuenta y actualiza el saldo total manualmente.
-- Antes de usar con dinero real, probar con datos ficticios y revisar la pantalla de planificación, en especial las fechas de quincena y la disponibilidad mensual. La programación se registra, pero aún no se crea una agenda automática de vencimientos con notificaciones.
+- Antes de usar con dinero real, prueba con datos ficticios y revisa la pantalla de planificación, en especial las fechas de quincena y la disponibilidad mensual. La actualización de recordatorios descrita al final agrega avisos push diarios para fechas de vencimiento.
 
 
 ## Edición de deudas e ingresos (versión actualizada)
@@ -161,8 +161,74 @@ No borres la base de datos para corregir un monto. Estas funciones permiten ajus
 La verificación completa de API requiere instalar las dependencias de `requirements.txt`. En el entorno de preparación, la sintaxis Python y JavaScript y las instrucciones SQL de migración SQLite se validaron, pero la prueba integral de Flask no pudo ejecutarse porque Flask no estaba instalado.
 
 
-### Corrección del error 500 en `/api/state` (PostgreSQL)
+## Actualización: planificador, recordatorios push y acceso biométrico
 
-Esta versión incluye una migración de arranque que repara la columna `shared_state.id` en bases PostgreSQL existentes cuando estaba creada como `NOT NULL` sin un `DEFAULT` de secuencia. La migración crea/alinea `shared_state_id_seq`, asigna el valor por encima del ID máximo existente y establece el valor automático de la columna. No borra filas ni reinicia la base de datos.
+### Planificador de pagos y próximo vencimiento
 
-Al publicar la actualización, Render ejecutará esta migración al iniciar la aplicación. Después, prueba el inicio de sesión con una segunda cuenta y confirma que `/api/state` devuelve HTTP 200. No es necesario borrar usuarios ni recrear PostgreSQL.
+- La pestaña **Pagos** muestra la agenda de deudas planificadas y los vencimientos escolares que aún tengan saldo pendiente. En el inicio aparece la tarjeta **Próximo pago planificado** con el vencimiento más cercano.
+- Cada pago de deuda programado guarda `debtId`, que lo vincula con la deuda específica creada por el usuario. La agenda muestra entidad, descripción, moneda y monto de esa deuda.
+- Al crear una programación, el saldo real de la deuda no se reduce todavía: el monto se **reserva** para impedir que se programen pagos por encima de lo pendiente. La tarjeta de deuda muestra saldo real, monto reservado en agenda y capacidad disponible para planificar.
+- Al confirmar **Registrar como pagado**, el mismo registro vinculado cambia a `paid`, el importe se suma a `debt.paid` y se agrega a gastos. Si se cancela el plan, no reduce la deuda. Cancelar o borrar una deuda cancela sus programaciones activas para no dejar pagos huérfanos.
+- Hay una prueba adicional `node tests/planned_payment_link_test.js` para comprobar esa relación y el comportamiento del saldo. La aplicación debe probarse en Render antes de registrar pagos reales.
+- Se muestran cantidades pendientes, vencidas, vencen hoy y el importe de deudas programadas. Los pagos escolares se calculan como saldo pendiente y el servidor evita enviar recordatorios de importes ya cubiertos.
+
+### Notificaciones: 7, 4, 1 día y el día del vencimiento
+
+Los recordatorios push se programan para 7, 4, 1 y 0 días antes del vencimiento de pagos de deudas planificados y compromisos escolares con saldo pendiente. El proceso diario registra las entregas por usuario, tipo de pago, fecha y día de anticipación para evitar duplicarlas. Los avisos se envían a todos los dispositivos con notificaciones activadas para esa cuenta. Si un dispositivo rechaza el permiso, está sin conexión mucho tiempo o invalida su suscripción, el envío puede no mostrarse; el historial de la app sigue siendo la referencia.
+
+Para que funcionen incluso con la PWA cerrada, hay que configurar claves VAPID y un trabajo cron en Render; agregar el botón en la web no basta.
+
+1. En la Mac, genera las claves localmente (se necesita conexión a internet para instalar `cryptography` si no está disponible):
+
+   ```bash
+   cd control_financiero_implementacion
+   python3 -m venv .venv-keys
+   source .venv-keys/bin/activate
+   pip install cryptography
+   python tools/generate_vapid_keys.py
+   ```
+
+   La herramienta imprime `VAPID_PUBLIC_KEY` y `VAPID_PRIVATE_KEY`. El valor privado es un secreto: no lo pegues en GitHub, un documento compartido ni un chat.
+
+2. En las variables de entorno del **servicio web** de Render, establece `VAPID_PUBLIC_KEY` con el valor público que acaba de imprimir la herramienta. El servicio web ya debe tener `APP_PUBLIC_ORIGIN=https://control-financiero-wrm5.onrender.com`, `WEBAUTHN_RP_ID=control-financiero-wrm5.onrender.com` y `APP_TIMEZONE=America/Caracas`. Si tu URL pública cambió, ajusta el origen y RP ID a tu dominio real antes de registrar passkeys.
+
+3. En Render crea el cron `control-financiero-recordatorios` (o sincroniza su definición `render.yaml` si gestionas el servicio con Blueprint). Usa el mismo repositorio y rama, `Build Command: pip install -r requirements.txt`, `Start Command: python send_payment_reminders.py`, y el horario `0 12 * * *` (12:00 UTC, aproximadamente 8:00 a. m. en Caracas). Debe usar el mismo `DATABASE_URL` interno de PostgreSQL que el web service, `APP_TIMEZONE=America/Caracas`, `APP_SECRET_KEY` generado por Render, `VAPID_PRIVATE_KEY` con el valor privado, y `VAPID_CLAIMS_SUB=mailto:tu-correo-real@dominio.com`.
+
+4. En la app, desde cada dispositivo, entra en **Pagos → Activar recordatorios** y permite las notificaciones. Instala la PWA en el Pixel desde Chrome para tener un acceso cómodo; vuelve a activar permiso y suscripción en cada navegador/dispositivo.
+
+5. Ejecuta manualmente el cron una vez desde Render (**Trigger Run**) y revisa sus logs. Si no hay pagos en las ventanas de recordatorio o no hay suscripciones, es normal que envíe cero notificaciones.
+
+**Costo:** Render cobra el uso de cron jobs, con un cargo mensual mínimo documentado de USD 1 por servicio. Revisa el precio/plan que Render muestra antes de crear el cron; el trabajo programado no se crea en una instalación manual solo por hacer `git push`.
+
+### Acceso con huella, rostro o passkey
+
+- Inicia sesión primero con contraseña en el dispositivo donde quieras habilitarlo. En el encabezado, pulsa **Acceso biométrico**, confirma la acción del sistema y asigna un nombre al dispositivo. Cada Pixel, MacBook o navegador requiere su propio registro.
+- En el próximo acceso, escribe el nombre de usuario y pulsa **Entrar con huella, rostro o passkey**. Android/Chrome o el sistema operativo ofrecerá la verificación disponible: huella, reconocimiento facial, desbloqueo del dispositivo o una clave de acceso sincronizada. La biometría concreta depende del dispositivo configurado; la web no puede obligar al teléfono a usar una modalidad específica.
+- El backend guarda el identificador y la clave pública WebAuthn; la huella/plantilla facial y la clave privada permanecen bajo el control del autenticador del dispositivo. Si se pierde un dispositivo, inicia sesión por contraseña en otro equipo y elimina la credencial correspondiente cuando la pantalla de gestión de passkeys esté disponible, o desactívala desde los ajustes de credenciales del sistema.
+- Passkeys usan el dominio HTTPS asociado a la credencial. Cambiar de dominio requiere volver a registrar el acceso biométrico. No elimines las contraseñas: deben quedar como método alternativo de acceso.
+
+### Seguridad, límites y validación
+
+- Las tablas para passkeys, suscripciones push y registro de avisos se crean mediante `db.create_all()` al arrancar la app y no sustituyen ni borran `shared_state`.
+- Las notificaciones push requieren permiso por dispositivo; no son un SMS ni garantizan la entrega si el navegador/servicio push no está disponible. El cron diario da una ventana de ejecución aproximada de la hora configurada.
+- La sintaxis Python y JavaScript se puede comprobar con:
+
+  ```bash
+  python3 -m py_compile app.py send_payment_reminders.py tools/generate_vapid_keys.py
+  node --check /tmp/control-financiero-inline.js
+  ```
+
+  Para extraer el JavaScript inline actualizado antes de la segunda comprobación:
+
+  ```bash
+  python3 - <<'PY'
+  from pathlib import Path
+  import re
+  source = Path('static/index.html').read_text()
+  scripts = re.findall(r'<script>(.*?)</script>', source, flags=re.S)
+  Path('/tmp/control-financiero-inline.js').write_text('\n'.join(scripts))
+  PY
+  node --check /tmp/control-financiero-inline.js
+  ```
+
+  Estas comprobaciones validan sintaxis, no sustituyen una prueba integral del servidor y el navegador. Antes de usar datos reales, prueba un pago ficticio y confirma que llega una sola notificación en cada uno de los cuatro días configurados.
