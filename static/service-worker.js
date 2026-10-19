@@ -1,4 +1,4 @@
-const CACHE_NAME = 'control-financiero-shell-v9-payment-reservations';
+const CACHE_NAME = 'quincena-shell-v10';
 const SHELL = ['/', '/static/manifest.webmanifest', '/static/icons/icon-192.png', '/static/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -30,9 +30,9 @@ self.addEventListener('push', (event) => {
   } catch (_error) {
     payload = { body: event.data ? event.data.text() : '' };
   }
-  const title = String(payload.title || 'Control Financiero').slice(0, 120);
+  const title = String(payload.title || 'Quincena').slice(0, 120);
   const options = {
-    body: String(payload.body || 'Tienes un pago pendiente. Abre Control Financiero para revisarlo.').slice(0, 240),
+    body: String(payload.body || 'Tienes un pago pendiente. Abre Quincena para revisarlo.').slice(0, 240),
     icon: '/static/icons/icon-192.png',
     badge: '/static/icons/icon-192.png',
     tag: String(payload.tag || 'control-financiero-pago').slice(0, 160),
