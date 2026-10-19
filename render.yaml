@@ -2,7 +2,7 @@ services:
   - type: web
     name: control-financiero
     runtime: python
-    plan: free
+    plan: free  # El envío de correo por SMTP exige un plan de pago (starter o superior)
     region: ohio
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 60
@@ -29,6 +29,14 @@ services:
       - key: APP_TIMEZONE
         value: America/Caracas
       - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: ALLOW_REGISTRATION
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
         sync: false
   - type: cron
     name: control-financiero-recordatorios

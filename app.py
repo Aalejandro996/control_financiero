@@ -10,6 +10,13 @@ import secrets
 import string
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit
+import hashlib
+import smtplib
+import ssl
+import time
+import urllib.request
+from email.message import EmailMessage
+from html import escape as html_escape
 from zoneinfo import ZoneInfo
 from functools import wraps
 from pathlib import Path
@@ -73,7 +80,7 @@ DEFAULT_SHARED_DATA = {
     "exchangeRate": 40.0,
     "income": {"amount": 0, "currency": "USD"},  # compatibilidad con la versión anterior
     "incomeSources": [],  # sueldo, bono, cestatickets y otros ingresos programados
-    "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0},
+    "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0, "salud": 0, "hogar": 0, "ocio": 0, "educacion": 0},
     "expenses": [],
     "debts": [],
     "schoolExpenses": [],  # compromisos/cargos del colegio
@@ -87,6 +94,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(40), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    email = db.Column(db.String(254), nullable=True, index=True)
     role = db.Column(db.String(16), nullable=False, default="member")  # admin | member
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     active = db.Column(db.Boolean, nullable=False, default=True)
@@ -144,6 +152,20 @@ class ReminderDelivery(db.Model):
     days_before = db.Column(db.Integer, nullable=False)
     sent_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     __table_args__ = (db.UniqueConstraint("user_id", "payment_key", "due_date", "days_before", name="uq_reminder_delivery"),)
+
+
+class PasswordReset(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    used_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
+def migrate_user_email() -> None:
+    if "email" not in {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}:
+        db.session.execute(db.text('ALTER TABLE "user" ADD COLUMN email VARCHAR(254)'))
+        db.session.commit()
 
 
 def ensure_user_state(user_id: int) -> SharedState:
@@ -349,7 +371,7 @@ def normalize_shared_data(value) -> dict:
             clean["currency"] = "BS" if row.get("currency") in ("BS", "VES") else "USD"
             clean["date"] = str(row.get("date") or "")[:40]
             if key == "expenses":
-                clean["category"] = row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga"} else "fijo"
+                clean["category"] = row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga", "salud", "hogar", "ocio", "educacion"} else "fijo"
                 clean["description"] = str(row.get("description") or "Gasto")[:250]
                 clean["bank"] = str(row.get("bank") or "")[:120]
                 clean["method"] = row.get("method") if row.get("method") in {"banco", "efectivo", "pago_movil"} else "banco"
@@ -702,7 +724,7 @@ def status():
         authenticated=bool(user),
         csrf_token=session.get("csrf_token"),
         user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password} if user else None,
-        app_name="Control Financiero",
+        app_name="Quincena", registration_open=registration_open(),
     )
 
 
@@ -955,6 +977,137 @@ def push_unsubscribe():
     return jsonify(ok=True)
 
 
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
+
+
+def registration_open() -> bool:
+    return os.getenv("ALLOW_REGISTRATION", "false").lower() == "true" and not setup_required()
+
+
+def send_mail(to: str, subject: str, body: str, html_body: str | None = None) -> bool:
+    """Envía correo por SMTP de Gmail usando una contraseña de aplicación."""
+    smtp_user, smtp_password = os.getenv("SMTP_USER", ""), os.getenv("SMTP_PASSWORD", "")
+    if not smtp_user or not smtp_password:
+        return False
+    message = EmailMessage()
+    message["Subject"], message["To"] = subject, to
+    message["From"] = os.getenv("MAIL_FROM") or f"Quincena <{smtp_user}>"
+    message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10, context=ssl.create_default_context()) as smtp:
+            smtp.login(smtp_user, smtp_password)
+            smtp.send_message(message)
+        return True
+    except Exception:
+        return False
+
+
+def reset_email(username: str, link: str, minutes: int = 60) -> tuple[str, str]:
+    """Correo formal de restablecimiento de contraseña: (texto plano, HTML)."""
+    text = (
+        f"Estimado/a {username}:\n\n"
+        "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.\n\n"
+        f"Para continuar, abra el siguiente enlace. Tendrá una validez de {minutes} minutos y solo podrá utilizarse una vez:\n\n{link}\n\n"
+        "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.\n\n"
+        "Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono.\n\n"
+        "Atentamente,\nEl equipo de Quincena"
+    )
+    name, url = html_escape(username), html_escape(link, quote=True)
+    page = (
+        '<!doctype html><html lang="es"><body style="margin:0;padding:24px;background:#F3F6F2;font-family:Arial,Helvetica,sans-serif;color:#12211B">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">'
+        '<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #D5DDD7;border-radius:12px;overflow:hidden">'
+        '<tr><td style="background:#0B6B4D;padding:20px 28px;color:#ffffff;font-size:22px;font-weight:bold">Quincena</td></tr>'
+        '<tr><td style="padding:28px;font-size:16px;line-height:1.6">'
+        f'<p style="margin:0 0 16px">Estimado/a <b>{name}</b>:</p>'
+        '<p style="margin:0 0 16px">Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.</p>'
+        f'<p style="margin:0 0 24px">Para continuar, presione el siguiente botón. El enlace tiene una validez de <b>{minutes} minutos</b> y solo podrá utilizarse una vez.</p>'
+        f'<p style="margin:0 0 24px;text-align:center"><a href="{url}" style="display:inline-block;background:#0B6B4D;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:10px">Restablecer contraseña</a></p>'
+        f'<p style="margin:0 0 16px;font-size:14px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all">{url}</span></p>'
+        '<p style="margin:0 0 16px">Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.</p>'
+        '<p style="margin:0">Atentamente,<br>El equipo de Quincena</p></td></tr>'
+        '<tr><td style="padding:16px 28px;background:#F3F6F2;font-size:13px;color:#46564E">Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono. Este es un mensaje automático; por favor, no responda a este correo.</td></tr>'
+        '</table></td></tr></table></body></html>'
+    )
+    return text, page
+
+
+def start_session(user: "User"):
+    session.clear()
+    session["uid"] = user.id
+    session["csrf_token"] = secrets.token_urlsafe(32)
+    session.permanent = True
+    return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password})
+
+
+@app.post("/api/register")
+@limiter.limit("5 per hour")
+def register():
+    if not registration_open():
+        return jsonify(error="El registro no está disponible por ahora."), 403
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username", "")).strip().lower()
+    email = str(body.get("email", "")).strip().lower()
+    password = str(body.get("password", ""))
+    if len(username) < 3 or len(username) > 40 or not all(c.isalnum() or c in "._-" for c in username):
+        return jsonify(error="El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo."), 400
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        return jsonify(error="Escribe un correo válido."), 400
+    if len(password) < 12 or len(password) > 200:
+        return jsonify(error="Usa una contraseña de al menos 12 caracteres."), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify(error="Ese usuario ya existe. Elige otro."), 409
+    if User.query.filter(db.func.lower(User.email) == email).first():
+        return jsonify(error="Ya existe una cuenta con ese correo."), 409
+    user = User(username=username, email=email, password_hash=generate_password_hash(password), role="member", must_change_password=False)
+    db.session.add(user)
+    db.session.commit()
+    ensure_user_state(user.id)
+    audit("account_registered", "Cuenta creada", user.id)
+    return start_session(user)
+
+
+@app.post("/api/forgot-password")
+@limiter.limit("5 per hour")
+def forgot_password():
+    email = str((request.get_json(silent=True) or {}).get("email", "")).strip().lower()
+    user = User.query.filter(db.func.lower(User.email) == email, User.active.is_(True)).first() if EMAIL_RE.match(email) else None
+    if user:
+        PasswordReset.query.filter_by(user_id=user.id, used_at=None).delete()
+        token = secrets.token_urlsafe(32)
+        db.session.add(PasswordReset(user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(minutes=60)))
+        db.session.commit()
+        origin = os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or request.host_url.rstrip("/")
+        text_body, html_body = reset_email(user.username, f"{origin}/?reset={token}")
+        sent = send_mail(email, "Restablecimiento de contraseña – Quincena", text_body, html_body)
+        audit("password_reset_requested", "Enlace enviado" if sent else "No se pudo enviar el correo", user.id)
+    return jsonify(ok=True)  # misma respuesta exista o no el correo
+
+
+@app.post("/api/reset-password")
+@limiter.limit("10 per hour")
+def reset_password():
+    body = request.get_json(silent=True) or {}
+    new_password = str(body.get("new_password", ""))
+    if len(new_password) < 12 or len(new_password) > 200:
+        return jsonify(error="La contraseña nueva debe tener entre 12 y 200 caracteres."), 400
+    row = PasswordReset.query.filter_by(token_hash=hashlib.sha256(str(body.get("token", "")).encode()).hexdigest()).first()
+    now = datetime.now(timezone.utc)
+    expires = row.expires_at.replace(tzinfo=timezone.utc) if row and row.expires_at.tzinfo is None else (row.expires_at if row else None)
+    user = db.session.get(User, row.user_id) if row else None
+    if not row or row.used_at is not None or expires < now or not user or not user.active:
+        return jsonify(error="El enlace venció o ya se usó. Pide uno nuevo."), 400
+    user.password_hash = generate_password_hash(new_password)
+    user.must_change_password = False
+    row.used_at = now
+    db.session.commit()
+    session.clear()
+    audit("password_reset_done", "Contraseña restablecida por correo", user.id)
+    return jsonify(ok=True)
+
+
 @app.post("/api/logout")
 @require_auth(allow_password_change=True)
 def logout():
@@ -1144,6 +1297,60 @@ def audit_log():
     users = {u.id: u.username for u in User.query.filter(User.id.in_([e.user_id for e in events if e.user_id is not None])).all()}
     return jsonify(events=[{"action": e.action, "detail": e.detail, "username": users.get(e.user_id, "Sistema"), "created_at": e.created_at.isoformat() if e.created_at else None} for e in events])
 
+_RATE_CACHE = {"rate": None, "updated": None, "fetched": 0.0}
+
+
+def fetch_bcv_rate() -> dict:
+    """Dólar BCV consultado desde el servidor, con caché de 30 minutos y último valor conocido."""
+    now = time.time()
+    if _RATE_CACHE["rate"] and now - _RATE_CACHE["fetched"] < 1800:
+        return _RATE_CACHE
+    try:
+        request_obj = urllib.request.Request("https://ve.dolarapi.com/v1/dolares", headers={"User-Agent": "Quincena/1.0"})
+        with urllib.request.urlopen(request_obj, timeout=5) as response:
+            rows = json.loads(response.read().decode("utf-8"))
+        row = next((item for item in rows if item.get("fuente") == "oficial"), rows[0])
+        value = float(row.get("promedio"))
+        if math.isfinite(value) and 0 < value < 1_000_000:
+            _RATE_CACHE.update(rate=value, updated=row.get("fechaActualizacion") or datetime.now(timezone.utc).isoformat(), fetched=now)
+    except Exception:
+        pass  # se conserva el último valor conocido
+    return _RATE_CACHE
+
+
+@app.get("/api/rate")
+@require_auth()
+def get_rate():
+    cached = fetch_bcv_rate()
+    if not cached["rate"]:
+        return jsonify(error="No pudimos obtener el dólar BCV ahora. Inténtalo en unos minutos."), 503
+    return jsonify(rate=cached["rate"], updated_at=cached["updated"])
+
+
+@app.delete("/api/account")
+@limiter.limit("5 per hour")
+@require_auth()
+def delete_account():
+    body = request.get_json(silent=True) or {}
+    user = g.user
+    if not check_password_hash(user.password_hash, str(body.get("password", ""))):
+        return jsonify(error="La contraseña no coincide."), 400
+    if user.role == "admin" and User.query.filter_by(role="admin", active=True).count() <= 1:
+        return jsonify(error="Eres la única persona administradora. Crea otra antes de eliminar esta cuenta."), 409
+    uid = user.id
+    PasswordReset.query.filter_by(user_id=uid).delete()
+    UserPasskey.query.filter_by(user_id=uid).delete()
+    PushSubscription.query.filter_by(user_id=uid).delete()
+    ReminderDelivery.query.filter_by(user_id=uid).delete()
+    SharedState.query.filter_by(user_id=uid).delete()
+    SharedState.query.filter_by(updated_by=uid).update({"updated_by": None})
+    AuditEvent.query.filter_by(user_id=uid).update({"user_id": None})
+    db.session.delete(user)
+    db.session.commit()
+    session.clear()
+    audit("account_deleted", f"Cuenta eliminada (id {uid})", None)
+    return jsonify(ok=True)
+
 
 @app.errorhandler(413)
 def request_too_large(_error):
@@ -1153,6 +1360,7 @@ def request_too_large(_error):
 with app.app_context():
     db.create_all()
     migrate_shared_state_schema()
+    migrate_user_email()
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")), debug=False)
