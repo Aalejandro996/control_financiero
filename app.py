@@ -86,6 +86,7 @@ DEFAULT_SHARED_DATA = {
     "schoolExpenses": [],  # compromisos/cargos del colegio
     "schoolPayments": [],  # pagos parciales o totales de esos compromisos
     "plannedDebtPayments": [],  # agenda personal de pagos futuros de deuda
+    "recurring": [],  # gastos fijos que se repiten cada mes
     "debtPlan": {"monthlyEssentials": 0.0, "monthlyCushion": 0.0, "paymentPercent": 60, "strategy": "avalanche", "configured": False},
 }
 
@@ -95,6 +96,7 @@ class User(db.Model):
     username = db.Column(db.String(40), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     email = db.Column(db.String(254), nullable=True, index=True)
+    email_verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
     role = db.Column(db.String(16), nullable=False, default="member")  # admin | member
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     active = db.Column(db.Boolean, nullable=False, default=True)
@@ -161,21 +163,29 @@ class PasswordReset(db.Model):
     expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
     used_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
+class EmailVerification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    used_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
 
 def migrate_user_email() -> None:
-    """Añade user.email si falta. Debe correr antes de cualquier consulta a User."""
-    def has_email() -> bool:
-        return "email" in {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}
+    """Añade user.email y user.email_verified_at si faltan. Debe correr antes de cualquier consulta a User."""
+    def columns() -> set:
+        return {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}
 
-    if has_email():
-        return
-    try:
-        db.session.execute(db.text('ALTER TABLE "user" ADD COLUMN email VARCHAR(254)'))
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        if not has_email():  # si otro proceso la creó al mismo tiempo, no es un error
-            raise
+    for name, ddl in (("email", "VARCHAR(254)"), ("email_verified_at", "TIMESTAMP WITH TIME ZONE")):
+        if name in columns():
+            continue
+        try:
+            db.session.execute(db.text(f'ALTER TABLE "user" ADD COLUMN {name} {ddl}'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            if name not in columns():  # si otro proceso la creó al mismo tiempo, no es un error
+                raise
 
 
 def ensure_user_state(user_id: int) -> SharedState:
@@ -555,6 +565,31 @@ def normalize_shared_data(value) -> dict:
             "paymentChoice": row.get("paymentChoice") if row.get("paymentChoice") in {"minimum", "total", "custom"} else "custom",
         })
     result["plannedDebtPayments"] = planned_rows
+    raw_rec = value.get("recurring", [])
+    if not isinstance(raw_rec, list) or len(raw_rec) > 500:
+        raise ValueError("La colección recurring no es válida.")
+    rec_rows = []
+    for row in raw_rec:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        item_id = str(row.get("id"))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", item_id):
+            continue
+        try:
+            amount, day = float(row.get("amount", 0)), int(row.get("day", 1))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
+            continue
+        last = str(row.get("lastGenerated") or "")
+        rec_rows.append({
+            "id": item_id, "description": str(row.get("description") or "Gasto fijo")[:120], "amount": amount,
+            "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
+            "category": row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga", "salud", "hogar", "ocio", "educacion", "deudas"} else "fijo",
+            "day": min(31, max(1, day)), "active": bool(row.get("active", True)),
+            "lastGenerated": last if re.fullmatch(r"\d{4}-\d{2}", last) else "",
+        })
+    result["recurring"] = rec_rows
     return result
 
 
@@ -674,7 +709,7 @@ def three_way_merge(base_data, incoming_data, current_data):
                 conflicts.append(key)
             else:
                 merged[key] = incoming[key]
-    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments"):
+    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring"):
         merged[key], row_conflicts = merge_array(base[key], incoming[key], current[key])
         if row_conflicts:
             conflicts.extend([f"{key}:{x}" for x in row_conflicts])
@@ -1014,13 +1049,13 @@ def send_mail(to: str, subject: str, body: str, html_body: str | None = None) ->
         return False
 
 
-def reset_email(username: str, link: str, minutes: int = 60) -> tuple[str, str]:
+def reset_email(username: str, link: str, validity: str = "60 minutos", intro: str = "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.", cta: str = "Restablecer contraseña", ignore: str = "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.") -> tuple[str, str]:
     """Correo formal de restablecimiento de contraseña: (texto plano, HTML)."""
     text = (
         f"Estimado/a {username}:\n\n"
-        "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.\n\n"
-        f"Para continuar, abra el siguiente enlace. Tendrá una validez de {minutes} minutos y solo podrá utilizarse una vez:\n\n{link}\n\n"
-        "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.\n\n"
+        f"{intro}\n\n"
+        f"Para continuar, abra el siguiente enlace. Tendrá una validez de {validity} y solo podrá utilizarse una vez:\n\n{link}\n\n"
+        f"{ignore}\n\n"
         "Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono.\n\n"
         "Atentamente,\nEl equipo de Quincena"
     )
@@ -1032,11 +1067,11 @@ def reset_email(username: str, link: str, minutes: int = 60) -> tuple[str, str]:
         '<tr><td style="background:#0B6B4D;padding:20px 28px;color:#ffffff;font-size:22px;font-weight:bold">Quincena</td></tr>'
         '<tr><td style="padding:28px;font-size:16px;line-height:1.6">'
         f'<p style="margin:0 0 16px">Estimado/a <b>{name}</b>:</p>'
-        '<p style="margin:0 0 16px">Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.</p>'
-        f'<p style="margin:0 0 24px">Para continuar, presione el siguiente botón. El enlace tiene una validez de <b>{minutes} minutos</b> y solo podrá utilizarse una vez.</p>'
-        f'<p style="margin:0 0 24px;text-align:center"><a href="{url}" style="display:inline-block;background:#0B6B4D;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:10px">Restablecer contraseña</a></p>'
+        f'<p style="margin:0 0 16px">{html_escape(intro)}</p>'
+        f'<p style="margin:0 0 24px">Para continuar, presione el siguiente botón. El enlace tiene una validez de <b>{validity}</b> y solo podrá utilizarse una vez.</p>'
+        f'<p style="margin:0 0 24px;text-align:center"><a href="{url}" style="display:inline-block;background:#0B6B4D;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:10px">{cta}</a></p>'
         f'<p style="margin:0 0 16px;font-size:14px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all">{url}</span></p>'
-        '<p style="margin:0 0 16px">Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.</p>'
+        f'<p style="margin:0 0 16px">{html_escape(ignore)}</p>'
         '<p style="margin:0">Atentamente,<br>El equipo de Quincena</p></td></tr>'
         '<tr><td style="padding:16px 28px;background:#F3F6F2;font-size:13px;color:#46564E">Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono. Este es un mensaje automático; por favor, no responda a este correo.</td></tr>'
         '</table></td></tr></table></body></html>'
@@ -1061,6 +1096,8 @@ def register():
     username = str(body.get("username", "")).strip().lower()
     email = str(body.get("email", "")).strip().lower()
     password = str(body.get("password", ""))
+    if body.get("accept_terms") is not True:
+        return jsonify(error="Debes aceptar los términos y la política de privacidad para crear tu cuenta."), 400
     if len(username) < 3 or len(username) > 40 or not all(c.isalnum() or c in "._-" for c in username):
         return jsonify(error="El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo."), 400
     if len(email) > 254 or not EMAIL_RE.match(email):
@@ -1075,15 +1112,60 @@ def register():
     db.session.add(user)
     db.session.commit()
     ensure_user_state(user.id)
-    audit("account_registered", "Cuenta creada", user.id)
+    audit("account_registered", "Cuenta creada; aceptó términos y privacidad (versión 2026-10-20)", user.id)
+    send_verification(user)
     return start_session(user)
+
+
+def send_verification(user: "User") -> bool:
+    token = secrets.token_urlsafe(32)
+    EmailVerification.query.filter_by(user_id=user.id, used_at=None).delete()
+    db.session.add(EmailVerification(user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(hours=24)))
+    db.session.commit()
+    origin = os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or request.host_url.rstrip("/")
+    text_body, html_body = reset_email(user.username, f"{origin}/?verify={token}", "24 horas",
+                                       "Gracias por crear su cuenta en Quincena. Para activar la recuperación de su contraseña, necesitamos confirmar su correo electrónico.",
+                                       "Confirmar correo", "Si usted no creó esta cuenta, puede ignorar este mensaje.")
+    return send_mail(user.email, "Confirme su correo electrónico – Quincena", text_body, html_body)
+
+
+@app.post("/api/verify-email")
+@limiter.limit("20 per hour")
+def verify_email():
+    token = str((request.get_json(silent=True) or {}).get("token", ""))
+    row = EmailVerification.query.filter_by(token_hash=hashlib.sha256(token.encode()).hexdigest()).first()
+    now = datetime.now(timezone.utc)
+    expires = (row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at) if row else None
+    user = db.session.get(User, row.user_id) if row else None
+    if not row or row.used_at is not None or expires < now or not user:
+        return jsonify(error="El enlace venció o ya se usó. Pide uno nuevo desde la app."), 400
+    user.email_verified_at = now
+    row.used_at = now
+    db.session.commit()
+    audit("email_verified", "Correo confirmado", user.id)
+    return jsonify(ok=True)
+
+
+@app.get("/api/email-status")
+@require_auth()
+def email_status():
+    return jsonify(email=g.user.email, verified=bool(g.user.email_verified_at))
+
+
+@app.post("/api/resend-verification")
+@limiter.limit("3 per hour")
+@require_auth()
+def resend_verification():
+    if not g.user.email or g.user.email_verified_at:
+        return jsonify(error="Tu correo ya está confirmado."), 400
+    return jsonify(ok=True, sent=send_verification(g.user))
 
 
 @app.post("/api/forgot-password")
 @limiter.limit("5 per hour")
 def forgot_password():
     email = str((request.get_json(silent=True) or {}).get("email", "")).strip().lower()
-    user = User.query.filter(db.func.lower(User.email) == email, User.active.is_(True)).first() if EMAIL_RE.match(email) else None
+    user = User.query.filter(db.func.lower(User.email) == email, User.active.is_(True), User.email_verified_at.isnot(None)).first() if EMAIL_RE.match(email) else None
     if user:
         PasswordReset.query.filter_by(user_id=user.id, used_at=None).delete()
         token = secrets.token_urlsafe(32)
@@ -1349,6 +1431,7 @@ def delete_account():
         return jsonify(error="Eres la única persona administradora. Crea otra antes de eliminar esta cuenta."), 409
     uid = user.id
     PasswordReset.query.filter_by(user_id=uid).delete()
+    EmailVerification.query.filter_by(user_id=uid).delete()
     UserPasskey.query.filter_by(user_id=uid).delete()
     PushSubscription.query.filter_by(user_id=uid).delete()
     ReminderDelivery.query.filter_by(user_id=uid).delete()
