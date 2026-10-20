@@ -80,7 +80,7 @@ DEFAULT_SHARED_DATA = {
     "exchangeRate": 40.0,
     "income": {"amount": 0, "currency": "USD"},  # compatibilidad con la versión anterior
     "incomeSources": [],  # sueldo, bono, cestatickets y otros ingresos programados
-    "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0, "salud": 0, "hogar": 0, "ocio": 0, "educacion": 0},
+    "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0, "salud": 0, "hogar": 0, "ocio": 0, "educacion": 0, "deudas": 0},
     "expenses": [],
     "debts": [],
     "schoolExpenses": [],  # compromisos/cargos del colegio
@@ -381,7 +381,7 @@ def normalize_shared_data(value) -> dict:
             clean["currency"] = "BS" if row.get("currency") in ("BS", "VES") else "USD"
             clean["date"] = str(row.get("date") or "")[:40]
             if key == "expenses":
-                clean["category"] = row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga", "salud", "hogar", "ocio", "educacion"} else "fijo"
+                clean["category"] = row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga", "salud", "hogar", "ocio", "educacion", "deudas"} else "fijo"
                 clean["description"] = str(row.get("description") or "Gasto")[:250]
                 clean["bank"] = str(row.get("bank") or "")[:120]
                 clean["method"] = row.get("method") if row.get("method") in {"banco", "efectivo", "pago_movil"} else "banco"
