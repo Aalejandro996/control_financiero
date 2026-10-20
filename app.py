@@ -163,9 +163,19 @@ class PasswordReset(db.Model):
 
 
 def migrate_user_email() -> None:
-    if "email" not in {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}:
+    """Añade user.email si falta. Debe correr antes de cualquier consulta a User."""
+    def has_email() -> bool:
+        return "email" in {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}
+
+    if has_email():
+        return
+    try:
         db.session.execute(db.text('ALTER TABLE "user" ADD COLUMN email VARCHAR(254)'))
         db.session.commit()
+    except Exception:
+        db.session.rollback()
+        if not has_email():  # si otro proceso la creó al mismo tiempo, no es un error
+            raise
 
 
 def ensure_user_state(user_id: int) -> SharedState:
@@ -1359,8 +1369,8 @@ def request_too_large(_error):
 
 with app.app_context():
     db.create_all()
-    migrate_shared_state_schema()
     migrate_user_email()
+    migrate_shared_state_schema()
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")), debug=False)
