@@ -824,12 +824,26 @@ def service_worker():
 APK_PATH = Path(__file__).resolve().parent / "downloads" / "quincena.apk"
 
 
+def android_version() -> dict:
+    """Versión del APK publicado: la escribe GitHub Actions en downloads/version.json (o se toma de variables)."""
+    info = {"versionCode": int(os.getenv("ANDROID_APP_VERSION_CODE", "6") or 6), "version": os.getenv("ANDROID_APP_VERSION", "1.4.0"), "notes": ""}
+    try:
+        raw = json.loads((APK_PATH.parent / "version.json").read_text(encoding="utf-8"))
+        info["versionCode"] = int(raw.get("versionCode", info["versionCode"]))
+        info["version"] = str(raw.get("versionName") or info["version"])[:20]
+        info["notes"] = str(raw.get("notes") or "")[:200]
+    except (OSError, ValueError, TypeError):
+        pass
+    return info
+
+
 @app.get("/api/android-app")
 def android_app_info():
     if not APK_PATH.is_file():
         return jsonify(available=False)
-    return jsonify(available=True, version=os.getenv("ANDROID_APP_VERSION", "1.2.0"),
-                   size_mb=round(APK_PATH.stat().st_size / 1048576, 1), url="/descargar/android")
+    info = android_version()
+    return jsonify(available=True, version=info["version"], versionCode=info["versionCode"], notes=info["notes"],
+                   size_mb=round(APK_PATH.stat().st_size / 1048576, 1), url=f"/descargar/android?v={info['versionCode']}")
 
 
 @app.get("/descargar/android")
