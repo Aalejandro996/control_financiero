@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quincena-shell-v10';
+const CACHE_NAME = 'quincena-shell-v11';
 const SHELL = ['/', '/static/manifest.webmanifest', '/static/icons/icon-192.png', '/static/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -9,7 +9,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   // Authentication and financial API requests are never cached.
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/descargar/')) return;
   if (event.request.method !== 'GET') return;
   event.respondWith(fetch(event.request).then((response) => {
     if (response.ok && (url.pathname === '/' || url.pathname.startsWith('/static/'))) {

@@ -163,6 +163,18 @@ class PasswordReset(db.Model):
     expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
     used_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
+class DeviceToken(db.Model):
+    """Sesión de larga duración para la app móvil (se guarda solo el hash del token)."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    label = db.Column(db.String(80), nullable=False, default="Android")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    last_used_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
 class EmailVerification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -273,10 +285,32 @@ def setup_required() -> bool:
     return db.session.query(User.id).first() is None
 
 
+def _aware(value):
+    return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+def user_from_bearer() -> User | None:
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    row = DeviceToken.query.filter_by(token_hash=hashlib.sha256(header[7:].strip().encode()).hexdigest(), revoked_at=None).first()
+    now = datetime.now(timezone.utc)
+    if row is None or _aware(row.expires_at) < now:
+        return None
+    user = db.session.get(User, row.user_id)
+    if user is None or not user.active:
+        return None
+    if row.last_used_at is None or now - _aware(row.last_used_at) > timedelta(hours=1):
+        row.last_used_at, row.expires_at = now, now + timedelta(days=90)  # la sesión se renueva al usarla
+        db.session.commit()
+    g.via_token = True
+    return user
+
+
 def current_user() -> User | None:
     user_id = session.get("uid")
     if not user_id:
-        return None
+        return user_from_bearer()
     user = db.session.get(User, user_id)
     if user is None or not user.active:
         session.clear()
@@ -301,7 +335,7 @@ def require_auth(admin: bool = False, allow_password_change: bool = False):
                 return jsonify(error="Esta acción requiere permisos de administrador."), 403
             if user.must_change_password and not allow_password_change:
                 return jsonify(error="Debes cambiar tu contraseña antes de continuar.", code="password_change_required"), 428
-            if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not csrf_ok():
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not getattr(g, "via_token", False) and not csrf_ok():
                 return jsonify(error="Token de seguridad vencido. Actualiza la página e inicia sesión nuevamente."), 403
             g.user = user
             return fn(*args, **kwargs)
@@ -748,6 +782,26 @@ def service_worker():
     return response
 
 
+# ---- App Android: el archivo va en downloads/quincena.apk (fuera de /static para que el service worker no lo guarde) ----
+APK_PATH = Path(__file__).resolve().parent / "downloads" / "quincena.apk"
+
+
+@app.get("/api/android-app")
+def android_app_info():
+    if not APK_PATH.is_file():
+        return jsonify(available=False)
+    return jsonify(available=True, version=os.getenv("ANDROID_APP_VERSION", "1.0.0"),
+                   size_mb=round(APK_PATH.stat().st_size / 1048576, 1), url="/descargar/android")
+
+
+@app.get("/descargar/android")
+def download_android():
+    if not APK_PATH.is_file():
+        abort(404)
+    return send_from_directory(APK_PATH.parent, APK_PATH.name, mimetype="application/vnd.android.package-archive",
+                               as_attachment=True, download_name="Quincena.apk", max_age=0)
+
+
 @app.get("/healthz")
 def healthz():
     try:
@@ -1161,6 +1215,36 @@ def resend_verification():
     return jsonify(ok=True, sent=send_verification(g.user))
 
 
+@app.post("/api/mobile/login")
+@limiter.limit("10 per minute")
+def mobile_login():
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username", "")).strip().lower()
+    user = User.query.filter_by(username=username, active=True).first()
+    if not user or not check_password_hash(user.password_hash, str(body.get("password", ""))):
+        audit("login_failed", f"App móvil. Usuario: {username[:40]}", user_id=user.id if user else None)
+        return jsonify(error="Usuario o contraseña incorrectos."), 401
+    if user.must_change_password:
+        return jsonify(error="Cambia tu contraseña desde la versión web antes de usar la app."), 428
+    token, now = secrets.token_urlsafe(48), datetime.now(timezone.utc)
+    db.session.add(DeviceToken(user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), label=str(body.get("device") or "Android")[:80],
+                               last_used_at=now, expires_at=now + timedelta(days=90)))
+    db.session.commit()
+    audit("login_succeeded", "Inicio de sesión desde la app móvil", user.id)
+    return jsonify(ok=True, token=token, user={"username": user.username, "role": user.role})
+
+
+@app.post("/api/mobile/logout")
+@require_auth()
+def mobile_logout():
+    header = request.headers.get("Authorization", "")
+    row = DeviceToken.query.filter_by(token_hash=hashlib.sha256(header[7:].strip().encode()).hexdigest()).first() if header.startswith("Bearer ") else None
+    if row is not None:
+        row.revoked_at = datetime.now(timezone.utc)
+        db.session.commit()
+    return jsonify(ok=True)
+
+
 @app.post("/api/forgot-password")
 @limiter.limit("5 per hour")
 def forgot_password():
@@ -1194,6 +1278,7 @@ def reset_password():
     user.password_hash = generate_password_hash(new_password)
     user.must_change_password = False
     row.used_at = now
+    DeviceToken.query.filter_by(user_id=user.id, revoked_at=None).update({"revoked_at": now})
     db.session.commit()
     session.clear()
     audit("password_reset_done", "Contraseña restablecida por correo", user.id)
@@ -1432,6 +1517,7 @@ def delete_account():
     uid = user.id
     PasswordReset.query.filter_by(user_id=uid).delete()
     EmailVerification.query.filter_by(user_id=uid).delete()
+    DeviceToken.query.filter_by(user_id=uid).delete()
     UserPasskey.query.filter_by(user_id=uid).delete()
     PushSubscription.query.filter_by(user_id=uid).delete()
     ReminderDelivery.query.filter_by(user_id=uid).delete()
