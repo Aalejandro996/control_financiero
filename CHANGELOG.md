@@ -1,0 +1,115 @@
+# Historial de versiones — Quincena
+
+Cada cambio se registra aquí. La versión de Android sube en `android/app/build.gradle.kts`
+(o sola, cuando la compila GitHub Actions: `versionCode` = 100 + número de ejecución).
+La web no tiene número propio: cada entrada indica qué cambió en la web y en la app.
+
+Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), **Quitado**.
+
+---
+
+## [Sin publicar]
+
+_(nada pendiente por ahora)_
+
+---
+
+## [1.5.0] — 23 oct 2026 · versionCode 7 (o el automático de GitHub)
+
+### Agregado
+- **Web y Android:** **gastos rápidos**: en Inicio aparecen los gastos que repetiste 2 o más veces
+  en los últimos 60 días (máx. 6). Un toque los registra de nuevo, con "Deshacer".
+- **Web y Android:** el formulario de gasto nuevo **recuerda** la última moneda, categoría y tasa.
+- **Android:** **atajo en el ícono**: mantener presionado Quincena › "Registrar gasto".
+- **Web (instalada como app):** el mismo atajo, desde el manifest (`/?nuevo=gasto`).
+- **Android:** **recordatorio diario** a la hora que elijas (Más): solo avisa si ese día no registraste nada.
+  Los domingos llega además el **resumen de la semana**. Tocar el aviso abre "Nuevo gasto".
+- **Web y Android:** tarjeta **"Tu semana"** en Inicio los domingos y lunes.
+- **Web:** pantalla de carga con aviso "Despertando el servidor…" si tarda más de 4 segundos.
+- **Android:** en la pantalla de entrada, aviso de que la primera conexión puede tardar hasta un minuto.
+
+
+### Corregido (flujo de GitHub, publicado junto con 1.5.0)
+- Compilación automática (GitHub Actions): se quitó el paso `setup-android`, que fallaba al
+  instalar el paquete `tools` (ya no existe). Ahora usa el SDK que trae el servidor de GitHub.
+- El flujo revisa al inicio que estén la carpeta `android` y los 4 secretos, y avisa en español qué falta.
+- Se borra `android/local.properties` antes de compilar en GitHub (apunta a la Mac).
+
+---
+
+## [1.4.0] — 23 oct 2026 · versionCode 6
+
+### Quitado
+- **Android:** lector de notificaciones del banco (permiso `BIND_NOTIFICATION_LISTENER_SERVICE`).
+  Era la causa probable de que Android y Google Play Protect bloquearan la instalación.
+
+### Agregado
+- **Android:** registrar un gasto desde un mensaje del banco con **Compartir › Quincena**
+  o con **Más › Pegar mensaje copiado**. Sin permisos especiales.
+- **Android:** aviso **"Nueva versión disponible"** en Inicio, con botón Actualizar.
+  La app consulta `/api/android-app` cada vez que se abre.
+- **Android:** la versión instalada se ve en Más (bajo el nombre de usuario).
+- **Servidor:** `downloads/version.json` define la versión publicada; `/api/android-app`
+  devuelve `versionCode` y notas.
+- **GitHub Actions:** `.github/workflows/android-apk.yml` compila y firma el APK en cada
+  cambio dentro de `android/` y lo publica en `downloads/`. Render despliega solo.
+- **Android:** firma y número de versión por variables de entorno (para GitHub Actions).
+- **Web:** diseño propio para computadora (más de 900 px): barra lateral con
+  "+ Registrar gasto", Inicio en columnas, Más en dos columnas, ventanas centradas.
+  En el teléfono la web se ve igual que antes.
+
+---
+
+## [1.3.0] — 23 oct 2026 · versionCode 5
+
+### Cambiado
+- **Web y Android:** Inicio rediseñado para no tener que bajar tanto (de ~4.000 a ~1.000 px):
+  - Tarjeta principal compacta con el selector de periodo (‹ › y 1.ª / 2.ª / Mes) adentro.
+  - Seis mosaicos: Próximo pago, Sueldo comprometido, Deudas, Tus tasas, Tus bolívares y Calculadora.
+    Cada uno abre su detalle.
+  - "Tu mes": en qué se va el dinero + las 3 categorías de presupuesto más usadas, con "Ver todo".
+
+---
+
+## [1.2.0] — 23 oct 2026 · versionCode 4
+
+### Agregado
+- **Web y Android:** **Tu sueldo comprometido**: qué parte de las próximas 4 quincenas ya está
+  comprometida (cuotas, pagos programados, compromisos y gastos fijos).
+- **Web y Android:** **Compra en cuotas** (Cashea y otras): crea la deuda, las cuotas con fecha
+  (cada 14 días, quincena o mes) y la inicial como gasto.
+- **Web y Android:** **Calculadora de caja**: compara el costo real de pagar en $ o en Bs.
+- **Web y Android:** **Poder de compra**: cuánto valor pierden tus bolívares guardados.
+- **Servidor:** campos `bsSavings` y `rateHistory` (historial diario de tasas, máx. 120 días).
+- **Android:** registro automático leyendo notificaciones del banco *(quitado en 1.4.0)*.
+
+---
+
+## [1.1.0] — 23 oct 2026 · versionCode 3
+
+### Agregado
+- **Web y Android:** **Las tres tasas**: al registrar un gasto en bolívares se marca a qué tasa
+  se consiguieron (BCV, USDT u otra) y se calcula su costo real en dólares.
+- **Web y Android:** tarjeta "Tus tasas este mes" con la brecha BCV/USDT y cuánto ahorraste o perdiste.
+- **Servidor:** dólar USDT (paralelo) desde dolarapi; campos `rateType`, `rateUsed`,
+  `bcvRate`, `marketRate` en los gastos.
+
+---
+
+## [1.0.0] — 22–23 oct 2026 · versionCode 2
+
+### Agregado
+- **Android:** migración completa de la web a app nativa (Kotlin + Compose): Inicio, Movimientos,
+  Deudas, Pagos y Más; los formularios de la web; simulador de deudas; gastos fijos;
+  compromisos; sincronización sin conexión; entrada con huella o rostro; avisos de pago locales.
+- **Android:** diseño de la web (colores, letras Bricolage Grotesque y Figtree, íconos).
+- **Android:** ícono adaptativo en todos los tamaños.
+- **Web:** modal "Quincena para Android" para descargar el APK: se abre al iniciar sesión,
+  aviso en Inicio y tarjeta en Más. Ruta `/descargar/android`.
+- **Web:** logo incluido en la página (no depende de `static/icons`).
+
+### Corregido
+- **Android:** error de compilación "Conflicting overloads: parseMoney" (función duplicada en
+  `MainActivity.kt`).
+- **Android:** el modo de pruebas vuelve a usar el servidor local de la Mac (`10.0.2.2:5001`).
+- **Android:** los errores de inicio de sesión dicen la causa exacta.

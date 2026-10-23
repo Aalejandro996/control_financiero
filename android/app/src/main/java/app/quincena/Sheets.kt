@@ -78,10 +78,11 @@ fun GastoForm(st: AppState, id: String?) {
     val det = st.detected.firstOrNull { "det:" + it.id == id }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var amount by remember { mutableStateOf(inputMoney(e?.num("amount") ?: det?.amount)) }
-    var cur by remember { mutableStateOf(e?.str("currency") ?: det?.currency ?: "USD") }
-    var cat by remember { mutableStateOf(e?.str("category") ?: "comida") }
+    // Un gasto nuevo arranca con la última moneda, categoría y tasa que usaste.
+    var cur by remember { mutableStateOf(e?.str("currency") ?: det?.currency ?: st.repo.pref("last_cur") ?: "USD") }
+    var cat by remember { mutableStateOf(e?.str("category") ?: st.repo.pref("last_cat")?.takeIf { it in CATS } ?: "comida") }
     var note by remember { mutableStateOf(e?.str("description") ?: det?.note ?: "") }
-    var rateType by remember { mutableStateOf(e?.str("rateType") ?: "bcv") }
+    var rateType by remember { mutableStateOf(e?.str("rateType") ?: (if (e == null) st.repo.pref("last_rt") else null) ?: "bcv") }
     var rateOther by remember { mutableStateOf(if (e?.str("rateType") == "otra") inputMoney(e?.num("rateUsed")) else "") }
     SheetTitle(if (e == null) "Nuevo gasto" else "Editar gasto")
     MoneyField("Monto", amount) { amount = it }
@@ -93,6 +94,7 @@ fun GastoForm(st: AppState, id: String?) {
     Footer(st, {
         val a = pos(amount) ?: return@Footer st.badAmount()
         if (det != null) { Detected.remove(ctx, det.id); st.detected = Detected.load(ctx) }
+        if (e == null) { st.repo.setPref("last_cur", cur); st.repo.setPref("last_cat", cat); st.repo.setPref("last_rt", rateType) }
         st.close()
         st.act("Guardado") { m ->
             val rf = rateFields(m.data(), cur, rateType, rateOther)

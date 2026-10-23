@@ -13,8 +13,8 @@ android {
         targetSdk = 35
         // En GitHub Actions la versión sube sola con cada compilación (VERSION_CODE / VERSION_NAME).
         // En tu Mac se usan estos valores; mantenlos por debajo de 100 para que las versiones automáticas siempre ganen.
-        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 6
-        versionName = System.getenv("VERSION_NAME") ?: "1.4.0"
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 7
+        versionName = System.getenv("VERSION_NAME") ?: "1.5.0"
     }
     // Firma automática solo si existen las variables (las pone GitHub Actions). En tu Mac sigues usando el asistente.
     val ciKeystore = System.getenv("KEYSTORE_FILE")

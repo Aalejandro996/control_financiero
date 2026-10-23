@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mantener presionado el ícono de Quincena > "Registrar gasto" -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="nuevo_gasto"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/atajo_gasto"
+        android:shortcutLongLabel="@string/atajo_gasto_largo">
+        <intent
+            android:action="app.quincena.NUEVO_GASTO"
+            android:targetPackage="app.quincena"
+            android:targetClass="app.quincena.MainActivity" />
+    </shortcut>
+</shortcuts>
