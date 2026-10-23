@@ -850,8 +850,10 @@ def android_app_info():
 def download_android():
     if not APK_PATH.is_file():
         abort(404)
+    # El nombre lleva la versión (Quincena-1.7.apk) para no confundirlo con descargas viejas.
+    version = re.sub(r"[^0-9A-Za-z.]", "", android_version()["version"]) or "nueva"
     return send_from_directory(APK_PATH.parent, APK_PATH.name, mimetype="application/vnd.android.package-archive",
-                               as_attachment=True, download_name="Quincena.apk", max_age=0)
+                               as_attachment=True, download_name=f"Quincena-{version}.apk", max_age=0)
 
 
 @app.get("/healthz")

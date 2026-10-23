@@ -10,7 +10,9 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ## [Sin publicar]
 
-_(nada pendiente por ahora)_
+### Corregido
+- **Servidor y web:** el APK se descarga con la versión en el nombre (`Quincena-1.7.apk`), para no abrir
+  por error una descarga vieja (`Quincena.apk`) y quedar con la versión anterior.
 
 ---
 
