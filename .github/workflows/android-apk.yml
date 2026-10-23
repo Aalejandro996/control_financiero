@@ -43,7 +43,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      # El servidor de GitHub ya trae el SDK de Android instalado (ANDROID_HOME); no hace falta descargarlo.
+      - name: Usar el SDK de Android del servidor
+        run: |
+          echo "SDK en: $ANDROID_HOME"
+          rm -f android/local.properties   # apunta a tu Mac; aquí estorba
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Preparar la llave de firma
         env:
