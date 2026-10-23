@@ -101,6 +101,8 @@ fun Inicio(st: AppState) {
     }
 
     DetectadosCard(st)
+    QuickRow(st)
+    SemanaCard(st)
 
     // Tarjeta principal, con el selector de periodo adentro
     val heroBg = if (cp.free < 0) HeroNeg else p.g
@@ -593,6 +595,7 @@ fun Mas(st: AppState) {
     Head(st)
     BolsaMasCard(st)
     DetectarCard(st)
+    HabitoCard(st)
     QCard {
         B("Mi presupuesto")
         Mut("Cuánto quieres gastar al mes, en dólares.")

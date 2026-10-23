@@ -47,7 +47,11 @@ class MainActivity : FragmentActivity() {
     /** Texto compartido desde otra app (por ejemplo, el SMS del banco). */
     private var shared by mutableStateOf<String?>(null)
 
+    /** Acción al abrir: "gasto" desde el atajo del ícono o el recordatorio diario. */
+    private var startAction by mutableStateOf<String?>(null)
+
     private fun readShared(i: android.content.Intent?) {
+        if (i?.action == ACTION_NUEVO_GASTO) { startAction = "gasto"; return }
         if (i == null || i.action != android.content.Intent.ACTION_SEND) return
         if (i.type?.startsWith("text/") != true) return
         shared = i.getStringExtra(android.content.Intent.EXTRA_TEXT)
@@ -71,7 +75,7 @@ class MainActivity : FragmentActivity() {
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { prompting = false }
         })
         readShared(intent)
-        setContent { App(repo, lock, resumes, shared, { shared = null }) { unlock() } }
+        setContent { App(repo, lock, resumes, shared, { shared = null }, startAction, { startAction = null }) { unlock() } }
     }
 
     override fun onResume() {
@@ -152,7 +156,10 @@ class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHos
 }
 
 @Composable
-fun App(repo: Repo, lock: LockState, resumes: Int, shared: String?, onShared: () -> Unit, unlock: () -> Unit) {
+fun App(
+    repo: Repo, lock: LockState, resumes: Int, shared: String?, onShared: () -> Unit,
+    startAction: String?, onStartAction: () -> Unit, unlock: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val st = remember { AppState(repo, scope, snack) }
@@ -162,7 +169,7 @@ fun App(repo: Repo, lock: LockState, resumes: Int, shared: String?, onShared: ()
             when {
                 !repo.loggedIn -> AuthScreen(st)
                 lock.locked -> LockScreen(unlock)
-                else -> Main(st, resumes, shared, onShared)
+                else -> Main(st, resumes, shared, onShared, startAction, onStartAction)
             }
             SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 150.dp, start = 16.dp, end = 16.dp)) {
                 Snackbar(it, shape = RoundedCornerShape(14.dp), containerColor = p.ink, contentColor = p.bg, actionColor = p.g)
@@ -190,9 +197,15 @@ private val TABS: List<Triple<String, String, ImageVector>> = listOf(
 )
 
 @Composable
-fun Main(st: AppState, resumes: Int, shared: String? = null, onShared: () -> Unit = {}) {
+fun Main(
+    st: AppState, resumes: Int, shared: String? = null, onShared: () -> Unit = {},
+    startAction: String? = null, onStartAction: () -> Unit = {},
+) {
     val p = pal
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(startAction) {
+        if (startAction == "gasto") { st.go("inicio"); st.open("gasto"); onStartAction() }
+    }
     LaunchedEffect(shared) {
         if (shared != null) { handleBankText(st, ctx, shared); onShared() }
     }

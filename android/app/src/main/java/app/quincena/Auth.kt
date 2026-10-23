@@ -98,6 +98,10 @@ fun AuthScreen(st: AppState) {
                 }
             }
             error?.let { Text(it, color = p.bad, fontWeight = FontWeight.SemiBold) }
+            // Render (plan gratis) se duerme: avisa si tarda, para que nadie piense que falló.
+            var slow by remember { mutableStateOf(false) }
+            LaunchedEffect(busy) { slow = false; if (busy) { kotlinx.coroutines.delay(4000); slow = true } }
+            if (busy && slow) Mut("Conectando… la primera vez puede tardar hasta un minuto mientras el servidor despierta.")
             when (mode) {
                 "registro" -> Btn("Crear mi cuenta", {
                     when {
