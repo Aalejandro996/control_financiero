@@ -1,0 +1,280 @@
+package app.quincena
+
+import android.os.Bundle
+import android.os.SystemClock
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import java.time.LocalDate
+
+class LockState { var locked by mutableStateOf(false) }
+
+class MainActivity : FragmentActivity() {
+    private lateinit var repo: Repo
+    private val lock = LockState()
+    private var resumes by mutableIntStateOf(0)
+    private var stoppedAt = 0L
+    private var prompting = false
+    private lateinit var prompt: BiometricPrompt
+    /** Texto compartido desde otra app (por ejemplo, el SMS del banco). */
+    private var shared by mutableStateOf<String?>(null)
+
+    private fun readShared(i: android.content.Intent?) {
+        if (i == null || i.action != android.content.Intent.ACTION_SEND) return
+        if (i.type?.startsWith("text/") != true) return
+        shared = i.getStringExtra(android.content.Intent.EXTRA_TEXT)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readShared(intent)
+    }
+
+    private val lockOn get() = repo.loggedIn && repo.pref("lock") == "1"
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        repo = Repo(applicationContext)
+        lock.locked = lockOn
+        prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { prompting = false; lock.locked = false }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { prompting = false }
+        })
+        readShared(intent)
+        setContent { App(repo, lock, resumes, shared, { shared = null }) { unlock() } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumes++
+        // Si la app estuvo en segundo plano más de 1 minuto, vuelve a pedir la huella.
+        if (stoppedAt > 0 && SystemClock.elapsedRealtime() - stoppedAt > 60_000 && lockOn) lock.locked = true
+        if (lock.locked) unlock()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        stoppedAt = SystemClock.elapsedRealtime()
+    }
+
+    fun unlock() {
+        if (prompting) return
+        if (!lockOn) { lock.locked = false; return }
+        prompting = true
+        prompt.authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Desbloquear Quincena")
+                .setSubtitle("Usa tu huella, tu rostro o el bloqueo del teléfono")
+                .setAllowedAuthenticators(BIOMETRIC_WEAK or DEVICE_CREDENTIAL)
+                .build()
+        )
+    }
+}
+
+data class Sheet(val kind: String, val arg: String? = null)
+
+/** Estado de la pantalla (lo que en la web era el objeto S). */
+class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHostState) {
+    var tab by mutableStateOf("inicio")
+    var sheet by mutableStateOf<Sheet?>(null)
+    var per by mutableStateOf(currentPeriod())
+    var hide by mutableStateOf(repo.pref("hide") == "1")
+    var rateInfo by mutableStateOf<String?>(null)
+    var detected by mutableStateOf<List<Det>>(emptyList())
+    var update by mutableStateOf<AppUpdate?>(null)
+    var mail by mutableStateOf<Pair<String?, Boolean>?>(null)
+    var movSub by mutableStateOf("gastos")
+    var pagosSub by mutableStateOf("pagos")
+    var q by mutableStateOf("")
+    var mon by mutableStateOf("")
+
+    val fmt: Fmt get() = Fmt(hide, repo.data.str("currency") == "BS", rateOf(repo.data))
+
+    fun open(kind: String, arg: String? = null) { sheet = Sheet(kind, arg) }
+    fun close() { sheet = null }
+    fun go(t: String) { tab = t; sheet = null }
+
+    fun toggleHide() { hide = !hide; repo.setPref("hide", if (hide) "1" else "0") }
+    fun setCurrency(c: String) = act(null) { it["currency"] = JsonPrimitive(c) }
+
+    fun toast(msg: String, undo: (() -> Unit)? = null) {
+        scope.launch {
+            snack.currentSnackbarData?.dismiss()
+            val r = snack.showSnackbar(msg, actionLabel = if (undo != null) "Deshacer" else null, duration = SnackbarDuration.Short)
+            if (r == SnackbarResult.ActionPerformed) undo?.invoke()
+        }
+    }
+
+    /** Aplica un cambio al instante, avisa y sincroniza. Con [undo] el aviso ofrece "Deshacer". */
+    fun act(msg: String?, undo: Boolean = false, change: (MutableMap<String, JsonElement>) -> Unit) {
+        val before = repo.data
+        var keys: Set<String> = emptySet()
+        scope.launch {
+            val err = repo.edit { m -> change(m); keys = (before.keys + m.keys).filter { before[it] != m[it] }.toSet() }
+            if (err != null) toast(err)
+        }
+        if (msg != null) toast(msg, if (undo) ({ restore(before, keys) }) else null)
+    }
+
+    private fun restore(before: JsonObject, keys: Set<String>) = act(null) { m ->
+        for (k in keys) { val v = before[k]; if (v == null) m.remove(k) else m[k] = v }
+    }
+}
+
+@Composable
+fun App(repo: Repo, lock: LockState, resumes: Int, shared: String?, onShared: () -> Unit, unlock: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val snack = remember { SnackbarHostState() }
+    val st = remember { AppState(repo, scope, snack) }
+    QuincenaTheme {
+        val p = pal
+        Box(Modifier.fillMaxSize().background(p.bg)) {
+            when {
+                !repo.loggedIn -> AuthScreen(st)
+                lock.locked -> LockScreen(unlock)
+                else -> Main(st, resumes, shared, onShared)
+            }
+            SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 150.dp, start = 16.dp, end = 16.dp)) {
+                Snackbar(it, shape = RoundedCornerShape(14.dp), containerColor = p.ink, contentColor = p.bg, actionColor = p.g)
+            }
+        }
+    }
+}
+
+@Composable
+fun LockScreen(unlock: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Title("Quincena", 36.sp)
+        Mut("Tus finanzas, solo para ti.")
+        Btn("Desbloquear", unlock)
+    }
+}
+
+private val TABS: List<Triple<String, String, ImageVector>> = listOf(
+    Triple("inicio", "Inicio", IconInicio), Triple("movimientos", "Movimientos", IconMov),
+    Triple("deudas", "Deudas", IconDeudas), Triple("pagos", "Pagos", IconPagos), Triple("mas", "Más", IconMas),
+)
+
+@Composable
+fun Main(st: AppState, resumes: Int, shared: String? = null, onShared: () -> Unit = {}) {
+    val p = pal
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(shared) {
+        if (shared != null) { handleBankText(st, ctx, shared); onShared() }
+    }
+    LaunchedEffect(resumes) {
+        st.detected = Detected.load(ctx)
+        st.update = st.repo.checkUpdate()
+        st.repo.refresh()?.let { st.toast(it) }
+        if (!st.repo.loggedIn) return@LaunchedEffect
+        st.rateInfo = st.repo.updateRate()
+        st.mail = st.repo.emailStatus()
+    }
+    BackHandler(enabled = st.tab != "inicio") { st.go("inicio") }
+
+    Scaffold(
+        containerColor = p.bg,
+        bottomBar = { NavBar(st) },
+        floatingActionButton = {
+            Box(
+                Modifier.size(56.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(p.g).clickable { st.open("gasto") },
+                contentAlignment = Alignment.Center,
+            ) { Text("+", color = Color.White, fontSize = 30.sp) }
+        },
+    ) { pad ->
+        key(st.tab) {
+            Column(
+                Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Column(
+                    Modifier.widthIn(max = 520.dp).fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 96.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    when (st.tab) {
+                        "inicio" -> Inicio(st)
+                        "movimientos" -> Movimientos(st)
+                        "deudas" -> Deudas(st)
+                        "pagos" -> Pagos(st)
+                        else -> Mas(st)
+                    }
+                }
+            }
+        }
+    }
+    SheetHost(st)
+}
+
+@Composable
+fun NavBar(st: AppState) {
+    val p = pal
+    Column(Modifier.fillMaxWidth().background(p.card)) {
+        HorizontalDivider(color = p.line, thickness = 1.dp)
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+        ) {
+            TABS.forEach { (k, label, icon) ->
+                val on = st.tab == k
+                val c = if (on) p.g else p.mut
+                Column(
+                    Modifier.widthIn(min = 64.dp).heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp)).clickable { st.go(k) },
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
+                ) {
+                    Icon(icon, null, Modifier.size(24.dp), tint = c)
+                    Text(label, fontSize = 12.sp, color = c, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+/** Encabezado de cada pantalla: nombre, quincena actual, ocultar montos y $ / Bs. */
+@Composable
+fun Head(st: AppState) {
+    val today = LocalDate.now()
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Title("Quincena")
+            Mut("${if (today.dayOfMonth <= 15) "1.ª" else "2.ª"} quincena de ${monthName(java.time.YearMonth.from(today))}")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Link(if (st.hide) "Mostrar" else "Ocultar", st::toggleHide)
+            Seg(listOf("USD" to "$", "BS" to "Bs."), if (st.repo.data.str("currency") == "BS") "BS" else "USD", st::setCurrency)
+        }
+    }
+}
