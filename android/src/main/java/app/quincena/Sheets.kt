@@ -1,0 +1,436 @@
+package app.quincena
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import java.time.LocalDate
+import kotlin.math.max
+import kotlin.math.min
+
+/** Ventanas que suben desde abajo, como .sheet en la web. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SheetHost(st: AppState) {
+    val s = st.sheet ?: return
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = { st.close() }, sheetState = state, containerColor = pal.bg,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        key(s) {
+            Column(
+                Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when (s.kind) {
+                    "gasto", "editar" -> GastoForm(st, s.arg)
+                    "ingreso", "editari" -> IngresoForm(st, s.arg)
+                    "deuda", "editard" -> DeudaForm(st, s.arg)
+                    "abono" -> AbonoForm(st, s.arg!!)
+                    "pago", "editarp" -> PagoForm(st, s.arg)
+                    "presupuesto" -> PresupuestoForm(st)
+                    "plan" -> PlanForm(st)
+                    "recurrente", "editarr" -> RecurrenteForm(st, s.arg)
+                    "compromiso", "editarc" -> CompromisoForm(st, s.arg)
+                    "cpago" -> CPagoForm(st, s.arg!!)
+                    "cuotas" -> CuotasForm(st)
+                    "bolsa" -> BolsaForm(st)
+                    "caja" -> CajaSheet(st)
+                    "borrar" -> BorrarForm(st)
+                    "legal" -> LegalSheet(st)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetTitle(t: String) = Title(t, 28.sp, pal.ink)
+
+@Composable
+private fun Footer(st: AppState, onSave: () -> Unit, label: String = "Guardar", enabled: Boolean = true) {
+    Btn(label, onSave, enabled = enabled)
+    Btn("Cancelar", { st.close() }, outline = true)
+}
+
+private fun AppState.badAmount() = toast("Escribe un monto mayor a cero.")
+private fun pos(s: String) = parseMoney(s)?.takeIf { it > 0 }
+
+// ---------- Gasto ----------
+
+@Composable
+fun GastoForm(st: AppState, id: String?) {
+    val e = st.repo.data.arr("expenses").firstOrNull { it.id == id }
+    // Gasto detectado en una notificación del banco: llega con el monto y la nota ya escritos.
+    val det = st.detected.firstOrNull { "det:" + it.id == id }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var amount by remember { mutableStateOf(inputMoney(e?.num("amount") ?: det?.amount)) }
+    var cur by remember { mutableStateOf(e?.str("currency") ?: det?.currency ?: "USD") }
+    var cat by remember { mutableStateOf(e?.str("category") ?: "comida") }
+    var note by remember { mutableStateOf(e?.str("description") ?: det?.note ?: "") }
+    var rateType by remember { mutableStateOf(e?.str("rateType") ?: "bcv") }
+    var rateOther by remember { mutableStateOf(if (e?.str("rateType") == "otra") inputMoney(e?.num("rateUsed")) else "") }
+    SheetTitle(if (e == null) "Nuevo gasto" else "Editar gasto")
+    MoneyField("Monto", amount) { amount = it }
+    CurrencySelect(cur) { cur = it }
+    if (cur == "BS") RatePicker(st.repo.data, rateType, { rateType = it }, rateOther, { rateOther = it })
+    CategoryChips(cat) { cat = it }
+    Field(if (e == null) "Nota (opcional)" else "Nota", note, { note = it })
+    if (e != null) OutlineDanger("Eliminar este gasto") { st.close(); st.act("Eliminado", undo = true) { it.removeRow("expenses", e.id) } }
+    Footer(st, {
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        if (det != null) { Detected.remove(ctx, det.id); st.detected = Detected.load(ctx) }
+        st.close()
+        st.act("Guardado") { m ->
+            val rf = rateFields(m.data(), cur, rateType, rateOther)
+            if (e == null) m.addFirst("expenses", row("id" to newId(), "amount" to a, "currency" to cur, "category" to cat, "description" to note.trim(),
+                "method" to "efectivo", "bank" to "", "date" to nowIso()).plusFields(*rf))
+            else m.updateRow("expenses", e.id) {
+                // Al editar se conserva la tasa BCV del día en que se registró el gasto.
+                val keepBcv = it.num("bcvRate").takeIf { b -> b > 0 && cur == "BS" }
+                it.plusFields("amount" to a, "currency" to cur, "category" to cat, "description" to note.trim(), *rf)
+                    .let { r -> if (keepBcv != null) r.plusFields("bcvRate" to keepBcv) else r }
+            }
+        }
+    })
+}
+
+/** "¿A qué tasa conseguiste esos bolívares?" — BCV, USDT u otra. */
+@Composable
+fun RatePicker(d: JsonObject, type: String, onType: (String) -> Unit, other: String, onOther: (String) -> Unit) {
+    val f = Fmt(false, false, 1.0)
+    val market = marketRateOf(d)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("¿A qué tasa conseguiste esos bolívares?", fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Chips {
+            Chip("BCV · ${f.plain(rateOf(d))}", type == "bcv") { onType("bcv") }
+            if (market > 0) Chip("USDT · ${f.plain(market)}", type == "usdt") { onType("usdt") }
+            Chip("Otra", type == "otra") { onType("otra") }
+        }
+        if (type == "otra") Field("Tasa (Bs. por dólar)", other, onOther, placeholder = "0,00", kind = KeyboardType.Decimal)
+        Mut("Así calculamos cuánto te costó de verdad en dólares.")
+    }
+}
+
+// ---------- Ingreso ----------
+
+@Composable
+fun IngresoForm(st: AppState, id: String?) {
+    val s = st.repo.data.arr("incomeSources").firstOrNull { it.id == id }
+    val prevDays = (s?.get("payDays") as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it.jsonPrimitive.intOrNull } ?: emptyList()
+    var name by remember { mutableStateOf(s?.str("name") ?: "") }
+    var amount by remember { mutableStateOf(inputMoney(s?.num("amount"))) }
+    var cur by remember { mutableStateOf(s?.str("currency") ?: "USD") }
+    var freq by remember { mutableStateOf(s?.str("frequency") ?: "quincenal") }
+    var day by remember { mutableStateOf(prevDays.firstOrNull()?.toString() ?: "") }
+    SheetTitle(if (s == null) "Nuevo ingreso" else "Editar ingreso")
+    Field("Nombre", name, { name = it }, placeholder = "Sueldo")
+    MoneyField("Monto", amount) { amount = it }
+    CurrencySelect(cur) { cur = it }
+    Select("Frecuencia", listOf("quincenal" to "Cada quincena", "mensual" to "Una vez al mes", "ocasional" to "Solo una vez"), freq) { freq = it }
+    if (freq == "mensual") Field("Día del mes en que cobras", day, { day = it.filter(Char::isDigit).take(2) }, placeholder = "1", kind = KeyboardType.Number)
+    if (s != null) OutlineDanger("Eliminar este ingreso") { st.close(); st.act("Ingreso eliminado", undo = true) { it.removeRow("incomeSources", s.id) } }
+    Footer(st, {
+        if (name.isBlank()) return@Footer st.toast("Escribe un nombre, por ejemplo Sueldo.")
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        val days = when (freq) {
+            "mensual" -> listOf((day.toIntOrNull() ?: prevDays.firstOrNull() ?: 1).coerceIn(1, 31))
+            "quincenal" -> if (s?.str("frequency") == "quincenal" && prevDays.size == 2) prevDays else listOf(15, 30)
+            else -> prevDays.ifEmpty { listOf(1) }
+        }
+        st.close()
+        st.act("Guardado") { m ->
+            if (s == null) m.addFirst("incomeSources", row("id" to newId(), "kind" to "salario", "name" to name.trim(), "amount" to a, "currency" to cur,
+                "frequency" to freq, "payDays" to days))
+            else m.updateRow("incomeSources", s.id) { it.plusFields("name" to name.trim(), "amount" to a, "currency" to cur, "frequency" to freq, "payDays" to days) }
+        }
+    })
+}
+
+// ---------- Deuda ----------
+
+@Composable
+fun DeudaForm(st: AppState, id: String?) {
+    val x = st.repo.data.arr("debts").firstOrNull { it.id == id }
+    var entity by remember { mutableStateOf(x?.str("entity") ?: "") }
+    var amount by remember { mutableStateOf(inputMoney(x?.num("amount"))) }
+    var cur by remember { mutableStateOf(x?.str("currency") ?: "USD") }
+    var paid by remember { mutableStateOf(inputMoney(x?.num("paid"))) }
+    var desc by remember { mutableStateOf(x?.str("description") ?: "") }
+    var minPay by remember { mutableStateOf(inputMoney(x?.num("minPayment"))) }
+    var rate by remember { mutableStateOf(inputMoney(x?.num("interestRate"))) }
+    SheetTitle(if (x == null) "Nueva deuda" else "Editar deuda")
+    Field("¿A quién le debes?", entity, { entity = it })
+    MoneyField("Monto total", amount) { amount = it }
+    CurrencySelect(cur) { cur = it }
+    if (x != null) MoneyField("Ya pagado", paid) { paid = it }
+    Field("Detalle (opcional)", desc, { desc = it })
+    MoneyField("Pago mínimo al mes (opcional)", minPay) { minPay = it }
+    Field("Interés mensual % (si lo sabes)", rate, { rate = it }, kind = KeyboardType.Decimal)
+    if (x != null) OutlineDanger("Eliminar esta deuda") {
+        st.close()
+        st.act("Deuda eliminada", undo = true) { m ->
+            m.removeRow("debts", x.id)
+            m.setRows("plannedDebtPayments", m.rows("plannedDebtPayments").filter { it.str("debtId") != x.id })
+        }
+    }
+    Footer(st, {
+        if (entity.isBlank()) return@Footer st.toast("Escribe a quién le debes.")
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        val mp = pos(minPay)
+        val ir = pos(rate)
+        st.close()
+        st.act("Guardado") { m ->
+            val interest: Array<Pair<String, Any?>> =
+                if (ir != null) arrayOf("interestRate" to ir, "interestKnown" to true, "interestPeriod" to "mensual")
+                else arrayOf("interestRate" to null, "interestKnown" to false)
+            if (x == null) {
+                val r = row("id" to newId(), "type" to "otro", "amount" to a, "currency" to cur, "entity" to entity.trim(), "description" to desc.trim(),
+                    "paid" to 0, "date" to nowIso(), "minPayment" to mp)
+                m.addFirst("debts", r.plusFields(*interest))
+            } else m.updateRow("debts", x.id) {
+                it.plusFields("entity" to entity.trim(), "description" to desc.trim(), "amount" to a, "currency" to cur,
+                    "paid" to min(a, max(0.0, parseMoney(paid) ?: 0.0)), "minPayment" to mp, *interest)
+            }
+        }
+    })
+}
+
+@Composable
+fun AbonoForm(st: AppState, id: String) {
+    val x = st.repo.data.arr("debts").firstOrNull { it.id == id } ?: return
+    var amount by remember { mutableStateOf("") }
+    SheetTitle("Abonar a ${x.str("entity") ?: "la deuda"}")
+    MoneyField("Monto del abono", amount) { amount = it }
+    Footer(st, {
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        st.close()
+        st.act("Guardado") { m ->
+            m.updateRow("debts", x.id) { it.plusFields("paid" to min(it.num("amount"), it.num("paid") + a)) }
+            m.addFirst("expenses", row("id" to newId() + "_abono", "amount" to a, "currency" to (x.str("currency") ?: "USD"), "category" to "deudas",
+                "description" to "Abono a ${x.str("entity") ?: "deuda"}", "method" to "banco", "bank" to "", "date" to nowIso()))
+        }
+    })
+}
+
+// ---------- Pagos programados ----------
+
+@Composable
+fun PagoForm(st: AppState, id: String?) {
+    val d = st.repo.data
+    val p = d.arr("plannedDebtPayments").firstOrNull { it.id == id }
+    val debts = d.arr("debts")
+    var debtId by remember { mutableStateOf(debts.firstOrNull()?.id ?: "") }
+    var amount by remember { mutableStateOf(inputMoney(p?.num("amount"))) }
+    var cur by remember { mutableStateOf(p?.str("currency") ?: debts.firstOrNull()?.str("currency") ?: "USD") }
+    var date by remember { mutableStateOf(p?.str("scheduledDate") ?: LocalDate.now().toString()) }
+    SheetTitle(if (p == null) "Programar pago" else "Editar pago")
+    if (p == null) Select("Deuda", debts.map { it.id to (it.str("entity") ?: "Deuda") }, debtId) { debtId = it }
+    MoneyField("Monto", amount) { amount = it }
+    CurrencySelect(cur) { cur = it }
+    DateField("Fecha", date, { date = it })
+    if (p != null) OutlineDanger("Cancelar este pago") {
+        st.close(); st.act("Pago cancelado", undo = true) { m -> m.updateRow("plannedDebtPayments", p.id) { it.plusFields("status" to "cancelled") } }
+    }
+    Footer(st, {
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        if (dateOf(date) == null) return@Footer st.toast("Elige la fecha del pago.")
+        st.close()
+        st.act("Guardado") { m ->
+            if (p != null) m.updateRow("plannedDebtPayments", p.id) { it.plusFields("amount" to a, "currency" to cur, "scheduledDate" to date) }
+            else {
+                val x = m.rows("debts").firstOrNull { it.id == debtId } ?: return@act
+                m.addFirst("plannedDebtPayments", row("id" to newId(), "debtId" to x["id"], "entity" to (x.str("entity") ?: ""), "description" to (x.str("description") ?: ""),
+                    "amount" to a, "currency" to cur, "scheduleType" to "date", "scheduledDate" to date, "status" to "planned"))
+            }
+        }
+    })
+}
+
+// ---------- Presupuesto y plan ----------
+
+@Composable
+fun PresupuestoForm(st: AppState) {
+    val b = st.repo.data.obj("budgets")
+    val values = remember { mutableStateMapOf<String, String>().apply { CATS.keys.forEach { put(it, inputMoney(b.num(it))) } } }
+    SheetTitle("Mi presupuesto")
+    CATS.forEach { (k, l) -> Field("$l (USD)", values[k] ?: "", { values[k] = it }, placeholder = "0", kind = KeyboardType.Decimal) }
+    Footer(st, {
+        st.close()
+        st.act("Guardado") { m ->
+            val old = (m["budgets"] as? JsonObject) ?: JsonObject(emptyMap())
+            m["budgets"] = JsonObject(old + CATS.keys.associateWith { JsonPrimitive(max(0.0, parseMoney(values[it] ?: "") ?: 0.0)) })
+        }
+    })
+}
+
+@Composable
+fun PlanForm(st: AppState) {
+    val s = st.repo.data.obj("debtPlan")
+    var ess by remember { mutableStateOf(inputMoney(s.num("monthlyEssentials"))) }
+    var cushion by remember { mutableStateOf(inputMoney(s.num("monthlyCushion"))) }
+    var pct by remember { mutableStateOf((s.num("paymentPercent").takeIf { it > 0 } ?: 60.0).toInt().toString()) }
+    var strategy by remember { mutableStateOf(if (s.str("strategy") == "snowball") "snowball" else "avalanche") }
+    SheetTitle("Mi plan de deudas")
+    MoneyField("Lo que necesito para vivir al mes (USD)", ess) { ess = it }
+    MoneyField("Colchón para imprevistos al mes (USD)", cushion) { cushion = it }
+    Field("Qué parte de lo que me sobra uso para deudas (30 a 85 %)", pct, { pct = it.filter(Char::isDigit).take(2) }, kind = KeyboardType.Number)
+    Select("Orden de pago", listOf("avalanche" to "Primero la deuda con más interés", "snowball" to "Primero la deuda más pequeña"), strategy) { strategy = it }
+    Footer(st, {
+        st.close()
+        st.act("Guardado") { m ->
+            m["debtPlan"] = row(
+                "monthlyEssentials" to max(0.0, parseMoney(ess) ?: 0.0), "monthlyCushion" to max(0.0, parseMoney(cushion) ?: 0.0),
+                "paymentPercent" to (pct.toIntOrNull() ?: 60).coerceIn(30, 85), "strategy" to strategy, "configured" to true,
+            )
+        }
+    })
+}
+
+// ---------- Gastos fijos ----------
+
+@Composable
+fun RecurrenteForm(st: AppState, id: String?) {
+    val r = st.repo.data.arr("recurring").firstOrNull { it.id == id }
+    var desc by remember { mutableStateOf(r?.str("description") ?: "") }
+    var amount by remember { mutableStateOf(inputMoney(r?.num("amount"))) }
+    var cur by remember { mutableStateOf(r?.str("currency") ?: "USD") }
+    var cat by remember { mutableStateOf(r?.str("category") ?: "fijo") }
+    var day by remember { mutableStateOf((r?.num("day")?.toInt() ?: 1).toString()) }
+    var active by remember { mutableStateOf(if (r?.bool("active") == false) "0" else "1") }
+    SheetTitle(if (r == null) "Nuevo gasto fijo" else "Editar gasto fijo")
+    Field("Descripción", desc, { desc = it }, placeholder = "Alquiler, internet…")
+    MoneyField("Monto", amount) { amount = it }
+    CurrencySelect(cur) { cur = it }
+    CategoryChips(cat) { cat = it }
+    Field("Día del mes", day, { day = it.filter(Char::isDigit).take(2) }, kind = KeyboardType.Number)
+    if (r != null) {
+        Select("Estado", listOf("1" to "Activo", "0" to "En pausa"), active) { active = it }
+        OutlineDanger("Eliminar este gasto fijo") { st.close(); st.act("Gasto fijo eliminado", undo = true) { it.removeRow("recurring", r.id) } }
+    }
+    Footer(st, {
+        if (desc.isBlank()) return@Footer st.toast("Escribe una descripción.")
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        val dd = (day.toIntOrNull() ?: 1).coerceIn(1, 31)
+        st.close()
+        st.act("Guardado") { m ->
+            if (r == null) m.addFirst("recurring", row("id" to newId(), "description" to desc.trim(), "amount" to a, "currency" to cur, "category" to cat,
+                "day" to dd, "active" to true, "lastGenerated" to ""))
+            else m.updateRow("recurring", r.id) { it.plusFields("description" to desc.trim(), "amount" to a, "currency" to cur, "category" to cat, "day" to dd, "active" to (active != "0")) }
+            maintain(m) // registra de una vez el gasto de este mes si ya pasó el día
+        }
+    })
+}
+
+// ---------- Compromisos (colegio, alquiler…) ----------
+
+@Composable
+fun CompromisoForm(st: AppState, id: String?) {
+    val d = st.repo.data
+    val x = d.arr("schoolExpenses").firstOrNull { it.id == id }
+    val paidSoFar = if (x != null) schoolPaid(d, x.id) else 0.0
+    val hasPays = x != null && d.arr("schoolPayments").any { it.str("expenseId") == x.id }
+    var desc by remember { mutableStateOf(x?.str("description") ?: "") }
+    var student by remember { mutableStateOf(x?.str("student") ?: "") }
+    var concept by remember { mutableStateOf(x?.str("concept") ?: "mensualidad") }
+    var amount by remember { mutableStateOf(inputMoney(x?.num("amount"))) }
+    var cur by remember { mutableStateOf(x?.str("currency") ?: "USD") }
+    var due by remember { mutableStateOf(x?.str("dueDate") ?: "") }
+    SheetTitle(if (x == null) "Nuevo compromiso" else "Editar compromiso")
+    Field("Descripción", desc, { desc = it }, placeholder = "Mensualidad del colegio")
+    Field("¿Para quién? (opcional)", student, { student = it })
+    Select("Tipo", CONCEPTS, concept) { concept = it }
+    MoneyField("Monto", amount) { amount = it }
+    if (!hasPays) CurrencySelect(cur) { cur = it }
+    DateField("Vence (opcional)", due, { due = it }, optional = true)
+    if (x != null) OutlineDanger("Eliminar este compromiso") {
+        st.close()
+        st.act("Compromiso eliminado", undo = true) { m ->
+            m.removeRow("schoolExpenses", x.id)
+            m.setRows("schoolPayments", m.rows("schoolPayments").filter { it.str("expenseId") != x.id })
+        }
+    }
+    Footer(st, {
+        if (desc.isBlank()) return@Footer st.toast("Escribe una descripción.")
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        if (x != null && a < paidSoFar - .01) return@Footer st.toast("El monto no puede ser menor a lo ya pagado.")
+        st.close()
+        st.act("Guardado") { m ->
+            if (x == null) m.addFirst("schoolExpenses", row("id" to newId(), "student" to student.trim(), "concept" to concept, "description" to desc.trim(),
+                "amount" to a, "currency" to cur, "date" to LocalDate.now().toString(), "dueDate" to due, "notes" to ""))
+            else m.updateRow("schoolExpenses", x.id) {
+                val upd = it.plusFields("description" to desc.trim(), "student" to student.trim(), "concept" to concept, "amount" to a, "dueDate" to due)
+                if (hasPays) upd else upd.plusFields("currency" to cur)
+            }
+        }
+    })
+}
+
+@Composable
+fun CPagoForm(st: AppState, id: String) {
+    val d = st.repo.data
+    val x = d.arr("schoolExpenses").firstOrNull { it.id == id } ?: return
+    val left = schoolLeft(d, x)
+    var amount by remember { mutableStateOf(inputMoney(left)) }
+    var method by remember { mutableStateOf("banco") }
+    var reference by remember { mutableStateOf("") }
+    SheetTitle("Pagar compromiso")
+    Mut("Falta ${Fmt(false, false, 1.0).orig(left, x.str("currency"))} de ${x.str("description") ?: "este compromiso"}.")
+    MoneyField("Monto", amount) { amount = it }
+    Select("Forma de pago", listOf("banco" to "Transferencia", "pago_movil" to "Pago móvil", "efectivo" to "Efectivo", "tarjeta" to "Tarjeta"), method) { method = it }
+    Field("Referencia (opcional)", reference, { reference = it })
+    Footer(st, {
+        val a = pos(amount) ?: return@Footer st.badAmount()
+        if (a > left + .01) return@Footer st.toast("El pago supera lo que falta. Baja el monto.")
+        val pid = newId()
+        val today = LocalDate.now().toString()
+        st.close()
+        st.act("Guardado") { m ->
+            m.addFirst("schoolPayments", row("id" to pid, "expenseId" to x["id"], "amount" to a, "currency" to (x.str("currency") ?: "USD"), "date" to today,
+                "method" to method, "reference" to reference.trim(), "notes" to ""))
+            m.addFirst("expenses", row("id" to pid + "_school", "amount" to a, "currency" to (x.str("currency") ?: "USD"), "category" to "fijo",
+                "description" to "Pago: ${x.str("description") ?: ""}", "method" to (if (method == "efectivo" || method == "pago_movil") method else "banco"),
+                "bank" to reference.trim(), "date" to nowIso()))
+        }
+    })
+}
+
+// ---------- Cuenta ----------
+
+@Composable
+fun BorrarForm(st: AppState) {
+    var pass by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    SheetTitle("Eliminar mi cuenta")
+    Mut("Se borrarán para siempre tu cuenta y todos tus datos. Escribe tu contraseña para confirmar.")
+    Field("Contraseña", pass, { pass = it }, password = true)
+    Btn("Eliminar para siempre", {
+        busy = true
+        st.scope.launch {
+            try { st.repo.deleteAccount(pass); st.close(); st.go("inicio"); st.toast("Tu cuenta fue eliminada.") }
+            catch (e: ApiError) { st.toast(e.message ?: "Algo salió mal.") }
+            catch (e: Offline) { st.toast("Sin conexión. Revisa tu internet e inténtalo de nuevo.") }
+            busy = false
+        }
+    }, color = pal.bad, enabled = !busy && pass.isNotEmpty())
+    Btn("Cancelar", { st.close() }, outline = true)
+}
+
+@Composable
+fun LegalSheet(st: AppState) {
+    SheetTitle("Términos y privacidad")
+    LegalText()
+    Btn("Volver", { st.close() })
+}
