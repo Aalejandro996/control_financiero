@@ -78,6 +78,9 @@ limiter = Limiter(get_remote_address, app=app, default_limits=[], storage_uri=os
 DEFAULT_SHARED_DATA = {
     "currency": "USD",
     "exchangeRate": 40.0,
+    "marketRate": 0.0,  # dólar del mercado (USDT/paralelo) en Bs.; 0 = desconocido
+    "bsSavings": 0.0,  # bolívares que la persona dice tener guardados (para el medidor de poder de compra)
+    "rateHistory": [],  # [{"d": "AAAA-MM-DD", "b": tasa BCV, "m": tasa USDT}] un registro por día, máx. 120
     "income": {"amount": 0, "currency": "USD"},  # compatibilidad con la versión anterior
     "incomeSources": [],  # sueldo, bono, cestatickets y otros ingresos programados
     "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0, "salud": 0, "hogar": 0, "ocio": 0, "educacion": 0, "deudas": 0},
@@ -343,6 +346,15 @@ def require_auth(admin: bool = False, allow_password_change: bool = False):
     return decorate
 
 
+def _rate_or_none(value):
+    """Tasa en Bs. por dólar válida, o None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and 0 < number < 10_000_000 else None
+
+
 def normalize_shared_data(value) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Los datos deben tener formato de objeto JSON.")
@@ -353,6 +365,23 @@ def normalize_shared_data(value) -> dict:
     except (TypeError, ValueError):
         rate = DEFAULT_SHARED_DATA["exchangeRate"]
     result["exchangeRate"] = rate if math.isfinite(rate) and 0 < rate < 1_000_000 else DEFAULT_SHARED_DATA["exchangeRate"]
+    result["marketRate"] = _rate_or_none(value.get("marketRate")) or 0.0
+    try:
+        savings = float(value.get("bsSavings") or 0)
+    except (TypeError, ValueError, OverflowError):
+        savings = 0.0
+    result["bsSavings"] = max(0.0, min(savings, 1_000_000_000_000)) if math.isfinite(savings) else 0.0
+    history, seen_days = [], set()
+    raw_history = value.get("rateHistory") if isinstance(value.get("rateHistory"), list) else []
+    for item in raw_history[-120:]:
+        if not isinstance(item, dict):
+            continue
+        day, bcv = str(item.get("d") or ""), _rate_or_none(item.get("b"))
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) or bcv is None or day in seen_days:
+            continue
+        seen_days.add(day)
+        history.append({"d": day, "b": bcv, "m": _rate_or_none(item.get("m")) or 0.0})
+    result["rateHistory"] = sorted(history, key=lambda x: x["d"])
     income = value.get("income") if isinstance(value.get("income"), dict) else {}
     try:
         income_amount = float(income.get("amount", 0))
@@ -403,7 +432,7 @@ def normalize_shared_data(value) -> dict:
             # Keep the existing app's record fields, but discard nested values / very long payloads.
             clean = {}
             for field, field_value in row.items():
-                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod", "interestKnown"}:
+                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod", "interestKnown", "rateType", "rateUsed", "bcvRate", "marketRate"}:
                     continue
                 if isinstance(field_value, (str, int, float, bool)) or field_value is None:
                     if isinstance(field_value, str):
@@ -429,6 +458,15 @@ def normalize_shared_data(value) -> dict:
                 clean["description"] = str(row.get("description") or "Gasto")[:250]
                 clean["bank"] = str(row.get("bank") or "")[:120]
                 clean["method"] = row.get("method") if row.get("method") in {"banco", "efectivo", "pago_movil"} else "banco"
+                # "Las tres tasas": a qué tasa se consiguieron los bolívares de este gasto.
+                for rate_field in ("rateUsed", "bcvRate", "marketRate"):
+                    clean.pop(rate_field, None)
+                    rate_value = _rate_or_none(row.get(rate_field))
+                    if rate_value is not None and clean["currency"] == "BS":
+                        clean[rate_field] = rate_value
+                clean.pop("rateType", None)
+                if clean["currency"] == "BS" and row.get("rateType") in {"bcv", "usdt", "otra"} and "rateUsed" in clean:
+                    clean["rateType"] = row.get("rateType")
             else:
                 clean["type"] = row.get("type") if row.get("type") in {"tdc", "cashea", "prestamo", "otro"} else "otro"
                 clean["entity"] = str(row.get("entity") or "Entidad")[:120]
@@ -790,7 +828,7 @@ APK_PATH = Path(__file__).resolve().parent / "downloads" / "quincena.apk"
 def android_app_info():
     if not APK_PATH.is_file():
         return jsonify(available=False)
-    return jsonify(available=True, version=os.getenv("ANDROID_APP_VERSION", "1.0.0"),
+    return jsonify(available=True, version=os.getenv("ANDROID_APP_VERSION", "1.2.0"),
                    size_mb=round(APK_PATH.stat().st_size / 1048576, 1), url="/descargar/android")
 
 
@@ -1474,7 +1512,7 @@ def audit_log():
     users = {u.id: u.username for u in User.query.filter(User.id.in_([e.user_id for e in events if e.user_id is not None])).all()}
     return jsonify(events=[{"action": e.action, "detail": e.detail, "username": users.get(e.user_id, "Sistema"), "created_at": e.created_at.isoformat() if e.created_at else None} for e in events])
 
-_RATE_CACHE = {"rate": None, "updated": None, "fetched": 0.0}
+_RATE_CACHE = {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None}
 
 
 def fetch_bcv_rate() -> dict:
@@ -1490,6 +1528,10 @@ def fetch_bcv_rate() -> dict:
         value = float(row.get("promedio"))
         if math.isfinite(value) and 0 < value < 1_000_000:
             _RATE_CACHE.update(rate=value, updated=row.get("fechaActualizacion") or datetime.now(timezone.utc).isoformat(), fetched=now)
+        market = next((item for item in rows if item.get("fuente") == "paralelo"), None)
+        market_value = _rate_or_none(market.get("promedio")) if market else None
+        if market_value:
+            _RATE_CACHE.update(parallel=market_value, parallel_updated=market.get("fechaActualizacion") or datetime.now(timezone.utc).isoformat())
     except Exception:
         pass  # se conserva el último valor conocido
     return _RATE_CACHE
@@ -1501,7 +1543,7 @@ def get_rate():
     cached = fetch_bcv_rate()
     if not cached["rate"]:
         return jsonify(error="No pudimos obtener el dólar BCV ahora. Inténtalo en unos minutos."), 503
-    return jsonify(rate=cached["rate"], updated_at=cached["updated"])
+    return jsonify(rate=cached["rate"], updated_at=cached["updated"], parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
 
 
 @app.delete("/api/account")
