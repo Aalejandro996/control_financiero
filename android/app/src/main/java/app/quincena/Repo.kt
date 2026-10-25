@@ -67,6 +67,8 @@ class Repo(ctx: Context) {
             put("username", user.trim().lowercase()); put("email", email.trim()); put("password", pass); put("accept_terms", true)
         })
         login(user, pass)
+        // Al crear la cuenta ya aceptó los términos vigentes.
+        edit { it["termsVersion"] = JsonPrimitive(TERMS_VERSION) }
     }
 
     suspend fun forgot(email: String) { api.call("POST", "/api/forgot-password", buildJsonObject { put("email", email.trim()) }) }
@@ -77,6 +79,18 @@ class Repo(ctx: Context) {
     }.getOrNull()
 
     suspend fun resendVerification() { api.call("POST", "/api/resend-verification") }
+
+    /** Cambia la contraseña. El servidor cierra la sesión en los demás teléfonos (este sigue abierto). */
+    suspend fun changePassword(old: String, new: String) {
+        api.call("POST", "/api/change-password", buildJsonObject { put("old_password", old); put("new_password", new) })
+    }
+
+    /** Cierra la sesión en los demás teléfonos. Devuelve cuántos se cerraron. */
+    suspend fun revokeOthers(): Int =
+        (api.call("POST", "/api/devices/revoke-others")["revoked"] as? JsonPrimitive)?.intOrNull ?: 0
+
+    /** Registra en el servidor que aceptaste los términos vigentes. */
+    suspend fun acceptTerms() { api.call("POST", "/api/accept-terms", buildJsonObject { put("version", TERMS_VERSION) }) }
 
     suspend fun logout() {
         runCatching { api.call("POST", "/api/mobile/logout") }

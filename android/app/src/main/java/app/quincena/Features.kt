@@ -240,7 +240,7 @@ fun rateRef(d: JsonObject): Pair<LocalDate, Double>? {
 @Composable
 fun PoderCard(st: AppState) {
     val d = st.repo.data
-    val sv = d.num("bsSavings")
+    val sv = savingsBs(d)
     val ref = rateRef(d)
     if (sv <= 0 && ref == null) return
     val b = rateOf(d)
@@ -263,7 +263,8 @@ fun PoderCard(st: AppState) {
             }
         }
         Text("Solo es información para que decidas tú; no es una recomendación financiera.", fontSize = 12.sp, color = pal.mut)
-        Btn(if (sv > 0) "Actualizar mis bolívares" else "¿Cuántos bolívares tienes?", { st.open("bolsa") }, small = true, outline = true, full = true)
+        if (bsBalance(d) == null) Btn(if (sv > 0) "Actualizar mis bolívares" else "¿Cuántos bolívares tienes?", { st.open("bolsa") }, small = true, outline = true, full = true)
+        else Text("Calculado con tus cuentas en bolívares.", fontSize = 12.sp, color = pal.mut)
     }
 }
 
@@ -403,7 +404,7 @@ fun BolsaMasCard(st: AppState) {
     val sv = st.repo.data.num("bsSavings")
     QCard {
         B("Mis bolívares guardados")
-        Mut("Dinos cuántos bolívares tienes y te mostramos cuánto valor pierden con el tiempo.")
+        Mut("Dinos cuántos bolívares tienes y te mostramos cuánto valor pierden con el tiempo. Si agregas cuentas en Bs., se calcula solo.")
         Btn(if (sv > 0) "Actualizar: Bs. ${if (st.hide) "••••" else Fmt(false, false, 1.0).plain(sv)}" else "Agregar mis bolívares", { st.open("bolsa") }, outline = true)
     }
 }

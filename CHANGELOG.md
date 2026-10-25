@@ -8,7 +8,52 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [1.6.0] — 25 oct 2026 · versionCode 8 (o el automático de GitHub)
+
+### Agregado
+- **Web y Android — Mis cuentas:** banco, efectivo, digital (Zelle…) y cripto (USDT). Cada gasto, ingreso o préstamo
+  puede salir o entrar de una cuenta; el saldo se calcula solo. Se ve en Movimientos › Cuentas, en Inicio ("Tu dinero")
+  y en Más.
+- **Web y Android — Mover o cambiar dinero** entre cuentas. Si cambias $ por Bs., queda guardada **"Tu cambio"**
+  (tasa de los últimos 45 días) y aparece como opción de tasa al registrar un gasto en bolívares.
+- **Web y Android:** los **bolívares guardados** se calculan solos con tus cuentas en Bs. (si no tienes, sigue el monto manual).
+- **Web y Android — Ingresos recibidos:** botón **"Me pagaron"** en cada ingreso fijo e **"Ingreso extra"**.
+  Los extras suman al "Te quedan" del periodo.
+- **Web y Android — Movimientos:** gastos **agrupados por día** (Hoy, Ayer…) con total diario, filtros por categoría
+  y total del filtro.
+- **Web y Android — Presupuesto por quincena:** en Inicio el presupuesto se muestra por quincena (la mitad del mensual)
+  y el título dice "Tu quincena". Botón **"Usar los sugeridos"** con el promedio de los últimos 3 meses.
+- **Web y Android — Calendario de pagos** en Pagos (pagos, compromisos, gastos fijos y cobros por día).
+- **Web y Android — Pagos repetidos:** al programar un pago se puede repetir cada mes o cada quincena (hasta 36 veces).
+- **Web y Android — Me deben:** préstamos a familiares o amigos, con "Me pagó" (abonos parciales) y fecha límite.
+  Tarjeta "Te deben" en Inicio.
+- **Web y Android — Fecha estimada para salir de cada deuda** ("terminas aprox. en dic 2027").
+- **Seguridad:** cambiar contraseña desde la app y la web; "Cerrar sesión en mis otros teléfonos";
+  el servidor cierra la sesión web tras 30 minutos sin uso; las contraseñas comunes o con tu usuario se rechazan.
+- **Legal:** páginas `/terminos`, `/privacidad` y `/cookies` (con derechos según los arts. 28 y 60 de la Constitución),
+  aceptación de los términos al entrar (se registra en el historial de seguridad), aviso de **cookies** en la web
+  y **Copyright** en Más, entrada y menú lateral.
+
+### Cambiado
+- **Servidor:** la cookie de sesión ahora se llama `__Host-quincena` (SameSite=Strict). **Todos tendrán que
+  entrar de nuevo una vez.**
+- **Servidor:** encabezado `Cross-Origin-Resource-Policy`; límite de 120 guardados por minuto; los datos nuevos
+  (cuentas, movimientos entre cuentas, ingresos, préstamos) se validan y se mezclan sin perder cambios.
+- **Web:** caché del service worker v14.
+- **Pruebas:** la prueba de humo usa contraseñas que cumplen la nueva regla.
+
+### Pendiente por tu parte
+- Definir la variable `CONTACT_EMAIL` en Render (correo que aparece en la política de privacidad).
+- Revisar los textos legales con un abogado antes de publicar en tiendas.
+
+---
+
 ## [Sin publicar]
+
+### Cambiado
+- **Aviso de actualización:** el texto sale de `android/NOVEDADES.txt` (lenguaje sencillo).
+  Si está vacío o es un mensaje técnico de Git (Merge, Revert…), dice "Mejoras de seguridad y correcciones.".
+  El servidor también filtra esos mensajes, así que corrige el aviso de la 1.8 sin recompilar.
 
 ### Corregido
 - **Servidor y web:** el APK se descarga con la versión en el nombre (`Quincena-1.7.apk`), para no abrir

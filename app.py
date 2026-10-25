@@ -65,10 +65,11 @@ app.config.update(
     SECRET_KEY=os.getenv("APP_SECRET_KEY") or secrets.token_hex(32),
     SQLALCHEMY_DATABASE_URI=database_url(),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SESSION_COOKIE_NAME="fincontrol_session",
+    # "__Host-" obliga a HTTPS, sin dominio y ruta "/": el navegador la protege mejor.
+    SESSION_COOKIE_NAME="__Host-quincena" if os.getenv("COOKIE_SECURE", "true" if os.getenv("RENDER") else "false").lower() == "true" else "quincena_session",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true" if os.getenv("RENDER") else "false").lower() == "true",
-    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SAMESITE="Strict",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     MAX_CONTENT_LENGTH=2 * 1024 * 1024,
 )
@@ -81,6 +82,11 @@ DEFAULT_SHARED_DATA = {
     "marketRate": 0.0,  # dólar del mercado (USDT/paralelo) en Bs.; 0 = desconocido
     "bsSavings": 0.0,  # bolívares que la persona dice tener guardados (para el medidor de poder de compra)
     "rateHistory": [],  # [{"d": "AAAA-MM-DD", "b": tasa BCV, "m": tasa USDT}] un registro por día, máx. 120
+    "accounts": [],  # cuentas: banco, efectivo, digital (Zelle, Binance…) con saldo inicial
+    "transfers": [],  # movimientos entre cuentas (incluye cambios de $ a Bs.)
+    "incomes": [],  # ingresos recibidos de verdad (cobros del sueldo, extras, devoluciones)
+    "receivables": [],  # "Me deben": préstamos a otras personas
+    "termsVersion": "",  # versión de términos aceptada
     "income": {"amount": 0, "currency": "USD"},  # compatibilidad con la versión anterior
     "incomeSources": [],  # sueldo, bono, cestatickets y otros ingresos programados
     "budgets": {"transporte": 0, "comida": 0, "fijo": 0, "hormiga": 0, "salud": 0, "hogar": 0, "ocio": 0, "educacion": 0, "deudas": 0},
@@ -284,6 +290,25 @@ def audit(action: str, detail: str = "", user_id: int | None = None) -> None:
         app.logger.exception("No se pudo guardar el evento de auditoría")
 
 
+COMMON_PASSWORDS = {
+    "123456789012", "1234567890123", "contraseña123", "contrasena123", "password1234", "password12345", "qwertyuiop12",
+    "venezuela123", "venezuela1234", "123456789abc", "abc123456789", "quincena1234", "quincena12345", "000000000000",
+    "111111111111", "iloveyou1234", "admin1234567", "administrador", "caracas12345", "123123123123", "qwerty123456",
+}
+
+
+def password_problem(password: str, username: str = "") -> str | None:
+    """Devuelve el motivo por el que una contraseña no sirve, o None si está bien."""
+    if len(password) < 12 or len(password) > 200:
+        return "Usa una contraseña de 12 a 200 caracteres."
+    low = password.lower()
+    if low in COMMON_PASSWORDS or len(set(password)) < 5:
+        return "Esa contraseña es muy fácil de adivinar. Elige otra más única."
+    if username and len(username) >= 3 and username.lower() in low:
+        return "La contraseña no debe contener tu nombre de usuario."
+    return None
+
+
 def setup_required() -> bool:
     return db.session.query(User.id).first() is None
 
@@ -310,15 +335,43 @@ def user_from_bearer() -> User | None:
     return user
 
 
+SESSION_IDLE = timedelta(minutes=int(os.getenv("SESSION_IDLE_MINUTES", "30") or 30))
+
+
 def current_user() -> User | None:
     user_id = session.get("uid")
     if not user_id:
         return user_from_bearer()
+    now = time.time()
+    last = float(session.get("seen", now))
+    if now - last > SESSION_IDLE.total_seconds():
+        session.clear()  # inactiva demasiado tiempo: hay que volver a entrar
+        return None
+    if now - last > 60:
+        session["seen"] = now
     user = db.session.get(User, user_id)
     if user is None or not user.active:
         session.clear()
         return None
     return user
+
+
+def current_bearer_hash() -> str | None:
+    header = request.headers.get("Authorization", "")
+    return hashlib.sha256(header[7:].strip().encode()).hexdigest() if header.startswith("Bearer ") else None
+
+
+def revoke_other_devices(user_id: int) -> int:
+    """Cierra la sesión de la app en todos los teléfonos menos el que hace la petición."""
+    keep = current_bearer_hash()
+    now = datetime.now(timezone.utc)
+    q = DeviceToken.query.filter_by(user_id=user_id, revoked_at=None)
+    if keep:
+        q = q.filter(DeviceToken.token_hash != keep)
+    rows = q.all()
+    for row in rows:
+        row.revoked_at = now
+    return len(rows)
 
 
 def csrf_ok() -> bool:
@@ -355,6 +408,52 @@ def _rate_or_none(value):
     return number if math.isfinite(number) and 0 < number < 10_000_000 else None
 
 
+def _clean_rows(raw, limit: int, spec: dict) -> list:
+    """Limpia una colección: solo campos conocidos, con su tipo. spec = {campo: tipo}; tipos: id, ref, str:N, num, pos, cur, date, enum:a|b, bool."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for row in raw[:limit]:
+        if not isinstance(row, dict):
+            continue
+        clean, ok = {}, True
+        for field, kind in spec.items():
+            value = row.get(field)
+            if kind in ("id", "ref"):
+                text = str(value or "")
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", text):
+                    clean[field] = text
+                elif kind == "id":
+                    ok = False
+                else:
+                    clean[field] = ""
+            elif kind.startswith("str:"):
+                clean[field] = str(value or "")[: int(kind[4:])]
+            elif kind in ("num", "pos"):
+                try:
+                    number = float(value or 0)
+                except (TypeError, ValueError, OverflowError):
+                    number = 0.0
+                if not math.isfinite(number):
+                    number = 0.0
+                number = max(-1_000_000_000_000, min(number, 1_000_000_000_000))
+                if kind == "pos":
+                    number = max(0.0, number)
+                clean[field] = number
+            elif kind == "cur":
+                clean[field] = "BS" if value in ("BS", "VES") else "USD"
+            elif kind == "date":
+                clean[field] = str(value or "")[:40]
+            elif kind.startswith("enum:"):
+                options = kind[5:].split("|")
+                clean[field] = value if value in options else options[0]
+            elif kind == "bool":
+                clean[field] = value is True
+        if ok:
+            out.append(clean)
+    return out
+
+
 def normalize_shared_data(value) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Los datos deben tener formato de objeto JSON.")
@@ -382,6 +481,18 @@ def normalize_shared_data(value) -> dict:
         seen_days.add(day)
         history.append({"d": day, "b": bcv, "m": _rate_or_none(item.get("m")) or 0.0})
     result["rateHistory"] = sorted(history, key=lambda x: x["d"])
+    result["accounts"] = _clean_rows(value.get("accounts"), 50, {
+        "id": "id", "name": "str:60", "kind": "enum:banco|efectivo|digital|cripto", "currency": "cur", "initial": "num", "archived": "bool"})
+    result["transfers"] = _clean_rows(value.get("transfers"), 5000, {
+        "id": "id", "date": "date", "fromId": "ref", "toId": "ref", "amountFrom": "pos", "amountTo": "pos", "note": "str:120"})
+    result["incomes"] = _clean_rows(value.get("incomes"), 10000, {
+        "id": "id", "date": "date", "amount": "pos", "currency": "cur", "name": "str:80", "sourceId": "ref", "accountId": "ref",
+        "kind": "enum:extra|sueldo|cobro"})
+    result["receivables"] = _clean_rows(value.get("receivables"), 2000, {
+        "id": "id", "person": "str:80", "amount": "pos", "paid": "pos", "currency": "cur", "date": "date", "dueDate": "date", "note": "str:200", "accountId": "ref"})
+    for r in result["receivables"]:
+        r["paid"] = min(r["paid"], r["amount"])
+    result["termsVersion"] = str(value.get("termsVersion") or "")[:20]
     income = value.get("income") if isinstance(value.get("income"), dict) else {}
     try:
         income_amount = float(income.get("amount", 0))
@@ -432,7 +543,7 @@ def normalize_shared_data(value) -> dict:
             # Keep the existing app's record fields, but discard nested values / very long payloads.
             clean = {}
             for field, field_value in row.items():
-                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod", "interestKnown", "rateType", "rateUsed", "bcvRate", "marketRate"}:
+                if field not in {"id", "amount", "paid", "currency", "category", "description", "method", "bank", "date", "type", "entity", "minPayment", "cutDate", "payBefore", "installments", "invoice", "interestRate", "interestPeriod", "interestKnown", "rateType", "rateUsed", "bcvRate", "marketRate", "accountId"}:
                     continue
                 if isinstance(field_value, (str, int, float, bool)) or field_value is None:
                     if isinstance(field_value, str):
@@ -464,6 +575,10 @@ def normalize_shared_data(value) -> dict:
                     rate_value = _rate_or_none(row.get(rate_field))
                     if rate_value is not None and clean["currency"] == "BS":
                         clean[rate_field] = rate_value
+                account_id = str(row.get("accountId") or "")
+                clean.pop("accountId", None)
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", account_id):
+                    clean["accountId"] = account_id
                 clean.pop("rateType", None)
                 if clean["currency"] == "BS" and row.get("rateType") in {"bcv", "usdt", "otra"} and "rateUsed" in clean:
                     clean["rateType"] = row.get("rateType")
@@ -775,13 +890,18 @@ def three_way_merge(base_data, incoming_data, current_data):
     current = normalize_shared_data(current_data)
     merged = copy.deepcopy(current)
     conflicts = []
-    for key in ("currency", "exchangeRate", "income", "budgets", "debtPlan"):
+    for key in ("currency", "income", "budgets", "debtPlan", "bsSavings"):
         if incoming[key] != base[key]:
             if current[key] != base[key] and current[key] != incoming[key]:
                 conflicts.append(key)
             else:
                 merged[key] = incoming[key]
-    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring"):
+    # Tasas e historial: gana el último que escribe (no es un conflicto real).
+    for key in ("exchangeRate", "marketRate", "rateHistory", "termsVersion"):
+        if incoming[key] != base[key]:
+            merged[key] = incoming[key]
+    for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring",
+                "accounts", "transfers", "incomes", "receivables"):
         merged[key], row_conflicts = merge_array(base[key], incoming[key], current[key])
         if row_conflicts:
             conflicts.extend([f"{key}:{x}" for x in row_conflicts])
@@ -800,6 +920,7 @@ def add_security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     # The existing page uses inline templates/events and trusted CDN assets for its visual styling.
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; connect-src 'self' https://ve.dolarapi.com; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com")
     if os.getenv("RENDER") or request.is_secure:
@@ -834,6 +955,9 @@ def android_version() -> dict:
         info["notes"] = str(raw.get("notes") or "")[:200]
     except (OSError, ValueError, TypeError):
         pass
+    # Nunca mostrar mensajes técnicos de Git (Merge, Revert…) a los usuarios.
+    if not info["notes"].strip() or re.match(r"(?i)^(merge|revert|apk |wip|fix\b|chore|update )", info["notes"].strip()):
+        info["notes"] = "Mejoras de seguridad y correcciones."
     return info
 
 
@@ -854,6 +978,54 @@ def download_android():
     version = re.sub(r"[^0-9A-Za-z.]", "", android_version()["version"]) or "nueva"
     return send_from_directory(APK_PATH.parent, APK_PATH.name, mimetype="application/vnd.android.package-archive",
                                as_attachment=True, download_name=f"Quincena-{version}.apk", max_age=0)
+
+
+TERMS_VERSION = "2026-10-23"
+
+
+@app.get("/api/devices")
+@require_auth()
+def list_devices():
+    keep = current_bearer_hash()
+    now = datetime.now(timezone.utc)
+    rows = DeviceToken.query.filter_by(user_id=g.user.id, revoked_at=None).order_by(DeviceToken.last_used_at.desc()).all()
+    return jsonify(devices=[{
+        "id": r.id, "label": r.label, "this": r.token_hash == keep,
+        "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+    } for r in rows if _aware(r.expires_at) > now])
+
+
+@app.post("/api/devices/revoke-others")
+@limiter.limit("10 per hour")
+@require_auth()
+def revoke_devices():
+    n = revoke_other_devices(g.user.id)
+    db.session.commit()
+    audit("devices_revoked", f"Sesión cerrada en {n} dispositivo(s)", g.user.id)
+    return jsonify(ok=True, revoked=n)
+
+
+@app.post("/api/accept-terms")
+@require_auth()
+def accept_terms():
+    version = str((request.get_json(silent=True) or {}).get("version", ""))[:20]
+    if version != TERMS_VERSION:
+        return jsonify(error="Versión de términos no válida."), 400
+    audit("terms_accepted", f"Aceptó términos, privacidad y cookies (versión {version})", g.user.id)
+    return jsonify(ok=True, version=version)
+
+
+@app.get("/terminos")
+@app.get("/privacidad")
+@app.get("/cookies")
+def legal_pages():
+    html = (Path(app.static_folder) / "legal.html").read_text(encoding="utf-8")
+    html = html.replace("{{CONTACTO}}", html_escape(os.getenv("CONTACT_EMAIL", "el correo de contacto indicado en la app")))
+    html = html.replace("{{VERSION}}", TERMS_VERSION).replace("{{SECCION}}", request.path.strip("/"))
+    response = app.response_class(html, mimetype="text/html")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    response.headers["X-Robots-Tag"] = "index, follow"
+    return response
 
 
 @app.get("/healthz")
@@ -898,8 +1070,8 @@ def setup_admin():
         return jsonify(error="El código inicial no es correcto."), 403
     if len(username) < 3 or len(username) > 40 or not all(c.isalnum() or c in "._-" for c in username):
         return jsonify(error="El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo."), 400
-    if len(password) < 12 or len(password) > 200:
-        return jsonify(error="Usa una contraseña inicial de al menos 12 caracteres."), 400
+    if password_problem(password, username):
+        return jsonify(error=password_problem(password, username)), 400
     if User.query.first() is not None:
         return jsonify(error="La configuración inicial ya fue completada por otro usuario."), 409
     user = User(username=username, password_hash=generate_password_hash(password), role="admin", must_change_password=False)
@@ -929,6 +1101,7 @@ def login():
         return jsonify(error="Usuario o contraseña incorrectos."), 401
     session.clear()
     session["uid"] = user.id
+    session["seen"] = time.time()
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     audit("login_succeeded", "Inicio de sesión correcto", user.id)
@@ -1210,8 +1383,8 @@ def register():
         return jsonify(error="El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo."), 400
     if len(email) > 254 or not EMAIL_RE.match(email):
         return jsonify(error="Escribe un correo válido."), 400
-    if len(password) < 12 or len(password) > 200:
-        return jsonify(error="Usa una contraseña de al menos 12 caracteres."), 400
+    if password_problem(password, username):
+        return jsonify(error=password_problem(password, username)), 400
     if User.query.filter_by(username=username).first():
         return jsonify(error="Ese usuario ya existe. Elige otro."), 409
     if User.query.filter(db.func.lower(User.email) == email).first():
@@ -1220,7 +1393,7 @@ def register():
     db.session.add(user)
     db.session.commit()
     ensure_user_state(user.id)
-    audit("account_registered", "Cuenta creada; aceptó términos y privacidad (versión 2026-10-20)", user.id)
+    audit("account_registered", "Cuenta creada; aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
     send_verification(user)
     return start_session(user)
 
@@ -1321,8 +1494,8 @@ def forgot_password():
 def reset_password():
     body = request.get_json(silent=True) or {}
     new_password = str(body.get("new_password", ""))
-    if len(new_password) < 12 or len(new_password) > 200:
-        return jsonify(error="La contraseña nueva debe tener entre 12 y 200 caracteres."), 400
+    if password_problem(new_password):
+        return jsonify(error=password_problem(new_password)), 400
     row = PasswordReset.query.filter_by(token_hash=hashlib.sha256(str(body.get("token", "")).encode()).hexdigest()).first()
     now = datetime.now(timezone.utc)
     expires = row.expires_at.replace(tzinfo=timezone.utc) if row and row.expires_at.tzinfo is None else (row.expires_at if row else None)
@@ -1355,15 +1528,16 @@ def change_password():
     new_password = str(body.get("new_password", ""))
     if not check_password_hash(g.user.password_hash, old_password):
         return jsonify(error="La contraseña actual no coincide."), 400
-    if len(new_password) < 12 or len(new_password) > 200:
-        return jsonify(error="La nueva contraseña debe tener entre 12 y 200 caracteres."), 400
+    if password_problem(new_password, g.user.username):
+        return jsonify(error=password_problem(new_password, g.user.username)), 400
     if new_password == old_password:
         return jsonify(error="La nueva contraseña debe ser diferente."), 400
     g.user.password_hash = generate_password_hash(new_password)
     g.user.must_change_password = False
+    revoke_other_devices(g.user.id)
     db.session.commit()
     session["csrf_token"] = secrets.token_urlsafe(32)
-    audit("password_changed", "Contraseña actualizada", g.user.id)
+    audit("password_changed", "Contraseña actualizada; se cerró la sesión en los demás dispositivos", g.user.id)
     return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": g.user.username, "role": g.user.role, "must_change_password": False})
 
 
@@ -1375,6 +1549,7 @@ def get_state():
 
 
 @app.put("/api/state")
+@limiter.limit("120 per minute")
 @require_auth()
 def put_state():
     body = request.get_json(silent=True) or {}

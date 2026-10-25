@@ -49,6 +49,13 @@ fun SheetHost(st: AppState) {
                     "bolsa" -> BolsaForm(st)
                     "caja" -> CajaSheet(st)
                     "info:tasas", "info:poder", "info:camino", "info:pres" -> InfoSheet(st, s.kind.removePrefix("info:"))
+                    "cobro" -> CobroForm(st, s.arg!!)
+                    "ingresox", "editin" -> IngresoExtraForm(st, s.arg)
+                    "cuenta", "editacc" -> CuentaForm(st, s.arg)
+                    "transfer" -> TransferForm(st)
+                    "prestamo", "editrec" -> PrestamoForm(st, s.arg)
+                    "mepago" -> MePagoForm(st, s.arg!!)
+                    "clave" -> ClaveForm(st)
                     "borrar" -> BorrarForm(st)
                     "legal" -> LegalSheet(st)
                 }
@@ -84,26 +91,28 @@ fun GastoForm(st: AppState, id: String?) {
     var note by remember { mutableStateOf(e?.str("description") ?: det?.note ?: "") }
     var rateType by remember { mutableStateOf(e?.str("rateType") ?: (if (e == null) st.repo.pref("last_rt") else null) ?: "bcv") }
     var rateOther by remember { mutableStateOf(if (e?.str("rateType") == "otra") inputMoney(e?.num("rateUsed")) else "") }
+    var acc by remember { mutableStateOf(e?.str("accountId") ?: st.repo.pref("last_acc")?.takeIf { accById(st.repo.data, it) != null } ?: "") }
     SheetTitle(if (e == null) "Nuevo gasto" else "Editar gasto")
     MoneyField("Monto", amount) { amount = it }
     CurrencySelect(cur) { cur = it }
     if (cur == "BS") RatePicker(st.repo.data, rateType, { rateType = it }, rateOther, { rateOther = it })
     CategoryChips(cat) { cat = it }
+    AccSelect(st, acc) { acc = it }
     Field(if (e == null) "Nota (opcional)" else "Nota", note, { note = it })
     if (e != null) OutlineDanger("Eliminar este gasto") { st.close(); st.act("Eliminado", undo = true) { it.removeRow("expenses", e.id) } }
     Footer(st, {
         val a = pos(amount) ?: return@Footer st.badAmount()
         if (det != null) { Detected.remove(ctx, det.id); st.detected = Detected.load(ctx) }
-        if (e == null) { st.repo.setPref("last_cur", cur); st.repo.setPref("last_cat", cat); st.repo.setPref("last_rt", rateType) }
+        if (e == null) { st.repo.setPref("last_cur", cur); st.repo.setPref("last_cat", cat); st.repo.setPref("last_rt", rateType); st.repo.setPref("last_acc", acc) }
         st.close()
         st.act("Guardado") { m ->
             val rf = rateFields(m.data(), cur, rateType, rateOther)
             if (e == null) m.addFirst("expenses", row("id" to newId(), "amount" to a, "currency" to cur, "category" to cat, "description" to note.trim(),
-                "method" to "efectivo", "bank" to "", "date" to nowIso()).plusFields(*rf))
+                "method" to "efectivo", "bank" to "", "date" to nowIso(), "accountId" to acc.ifEmpty { null }).plusFields(*rf))
             else m.updateRow("expenses", e.id) {
                 // Al editar se conserva la tasa BCV del día en que se registró el gasto.
                 val keepBcv = it.num("bcvRate").takeIf { b -> b > 0 && cur == "BS" }
-                it.plusFields("amount" to a, "currency" to cur, "category" to cat, "description" to note.trim(), *rf)
+                it.plusFields("amount" to a, "currency" to cur, "category" to cat, "description" to note.trim(), "accountId" to acc.ifEmpty { null }, *rf)
                     .let { r -> if (keepBcv != null) r.plusFields("bcvRate" to keepBcv) else r }
             }
         }
@@ -120,6 +129,8 @@ fun RatePicker(d: JsonObject, type: String, onType: (String) -> Unit, other: Str
         Chips {
             Chip("BCV · ${f.plain(rateOf(d))}", type == "bcv") { onType("bcv") }
             if (market > 0) Chip("USDT · ${f.plain(market)}", type == "usdt") { onType("usdt") }
+            val cambio = lastCambio(d)
+            if (cambio > 0) Chip("Tu cambio · ${f.plain(cambio)}", type == "cambio") { onType("cambio") }
             Chip("Otra", type == "otra") { onType("otra") }
         }
         if (type == "otra") Field("Tasa (Bs. por dólar)", other, onOther, placeholder = "0,00", kind = KeyboardType.Decimal)
@@ -239,11 +250,17 @@ fun PagoForm(st: AppState, id: String?) {
     var amount by remember { mutableStateOf(inputMoney(p?.num("amount"))) }
     var cur by remember { mutableStateOf(p?.str("currency") ?: debts.firstOrNull()?.str("currency") ?: "USD") }
     var date by remember { mutableStateOf(p?.str("scheduledDate") ?: LocalDate.now().toString()) }
+    var rep by remember { mutableStateOf("0") }
+    var times by remember { mutableStateOf("3") }
     SheetTitle(if (p == null) "Programar pago" else "Editar pago")
     if (p == null) Select("Deuda", debts.map { it.id to (it.str("entity") ?: "Deuda") }, debtId) { debtId = it }
     MoneyField("Monto", amount) { amount = it }
     CurrencySelect(cur) { cur = it }
-    DateField("Fecha", date, { date = it })
+    DateField(if (p == null) "Fecha (del primer pago)" else "Fecha", date, { date = it })
+    if (p == null) {
+        Select("Repetir", listOf("0" to "Solo una vez", "m" to "Cada mes", "q" to "Cada quincena"), rep) { rep = it }
+        if (rep != "0") Field("¿Cuántas veces en total?", times, { times = it.filter(Char::isDigit).take(2) }, kind = KeyboardType.Number)
+    }
     if (p != null) OutlineDanger("Cancelar este pago") {
         st.close(); st.act("Pago cancelado", undo = true) { m -> m.updateRow("plannedDebtPayments", p.id) { it.plusFields("status" to "cancelled") } }
     }
@@ -255,8 +272,16 @@ fun PagoForm(st: AppState, id: String?) {
             if (p != null) m.updateRow("plannedDebtPayments", p.id) { it.plusFields("amount" to a, "currency" to cur, "scheduledDate" to date) }
             else {
                 val x = m.rows("debts").firstOrNull { it.id == debtId } ?: return@act
-                m.addFirst("plannedDebtPayments", row("id" to newId(), "debtId" to x["id"], "entity" to (x.str("entity") ?: ""), "description" to (x.str("description") ?: ""),
-                    "amount" to a, "currency" to cur, "scheduleType" to "date", "scheduledDate" to date, "status" to "planned"))
+                val n = if (rep == "0") 1 else (times.toIntOrNull() ?: 1).coerceIn(1, 36)
+                val base = newId()
+                val first = dateOf(date)!!
+                val nuevos = (0 until n).map { i ->
+                    row("id" to (if (n > 1) "${base}_r${i + 1}" else base), "debtId" to x["id"], "entity" to (x.str("entity") ?: ""),
+                        "description" to (if (n > 1) "Pago ${i + 1} de $n" else (x.str("description") ?: "")),
+                        "amount" to a, "currency" to cur, "scheduleType" to "date",
+                        "scheduledDate" to (if (n > 1) stepDate(first, rep, i) else first).toString(), "status" to "planned")
+                }
+                m.setRows("plannedDebtPayments", nuevos + m.rows("plannedDebtPayments"))
             }
         }
     })
@@ -268,8 +293,14 @@ fun PagoForm(st: AppState, id: String?) {
 fun PresupuestoForm(st: AppState) {
     val b = st.repo.data.obj("budgets")
     val values = remember { mutableStateMapOf<String, String>().apply { CATS.keys.forEach { put(it, inputMoney(b.num(it))) } } }
+    val sg = remember { sugeridos(st.repo.data) }
     SheetTitle("Mi presupuesto")
-    CATS.forEach { (k, l) -> Field("$l (USD)", values[k] ?: "", { values[k] = it }, placeholder = "0", kind = KeyboardType.Decimal) }
+    Mut("Cuánto quieres gastar al mes, en dólares. En Inicio lo vemos por quincena (la mitad).${if (sg.isNotEmpty()) " Los sugeridos salen de tu promedio de los últimos 3 meses." else ""}")
+    if (sg.isNotEmpty()) Btn("Usar los sugeridos", {
+        sg.forEach { (k, v) -> if ((values[k] ?: "").isBlank()) values[k] = v.toString() }
+        st.toast("Listo: revisa los montos y toca Guardar.")
+    }, small = true, outline = true, full = true)
+    CATS.forEach { (k, l) -> Field("$l (USD al mes)" + (sg[k]?.let { " · sugerido $$it" } ?: ""), values[k] ?: "", { values[k] = it }, placeholder = "0", kind = KeyboardType.Decimal) }
     Footer(st, {
         st.close()
         st.act("Guardado") { m ->

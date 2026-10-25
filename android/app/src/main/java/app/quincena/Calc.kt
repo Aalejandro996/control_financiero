@@ -160,6 +160,8 @@ fun rateFields(d: JsonObject, cur: String, type: String, other: String): Array<P
     if (cur != "BS") return arrayOf("rateType" to null, "rateUsed" to null, "bcvRate" to null, "marketRate" to null)
     val bcv = rateOf(d)
     val market = marketRateOf(d)
+    val cambio = lastCambio(d)
+    if (type == "cambio" && cambio > 0) return arrayOf("rateType" to "otra", "rateUsed" to cambio, "bcvRate" to bcv, "marketRate" to market.takeIf { it > 0 })
     val o = parseMoney(other)?.takeIf { it > 0 }
     val t = when { type == "usdt" && market > 0 -> "usdt"; type == "otra" && o != null -> "otra"; else -> "bcv" }
     val used = when (t) { "usdt" -> market; "otra" -> o!!; else -> bcv }
@@ -192,8 +194,9 @@ fun monthlyIncome(d: JsonObject): Double {
 
 fun periodIncome(d: JsonObject, p: Period): Double {
     val srcs = d.arr("incomeSources")
-    if (srcs.isEmpty()) return monthlyIncome(d) * (if (p.half == 0) 1.0 else 0.5)
-    var inc = 0.0
+    val extra = extraIn(d, p.from, p.to)
+    if (srcs.isEmpty()) return monthlyIncome(d) * (if (p.half == 0) 1.0 else 0.5) + extra
+    var inc = extra
     for (s in srcs) {
         val a = usdOf(d, s.num("amount"), s.str("currency"))
         when (s.str("frequency")) {
@@ -249,7 +252,7 @@ data class Month(val inc: Double, val spent: Double, val cat: Map<String, Double
 }
 fun monthSummary(d: JsonObject): Month {
     val ym = YearMonth.now()
-    val inc = monthlyIncome(d)
+    val inc = monthlyIncome(d) + extraIn(d, ym.atDay(1), ym.atEndOfMonth())
     val cat = spentByCat(d, ym.atDay(1), ym.atEndOfMonth())
     val spent = cat.values.sum()
     val debt = debtTotals(d).remaining
@@ -258,7 +261,8 @@ fun monthSummary(d: JsonObject): Month {
 }
 
 /** Simulador "Pagar deudas sin ahogarte": avalancha o bola de nieve, igual que plan() en la web. */
-data class Plan(val configured: Boolean, val rec: Double, val over: Boolean, val months: Int?, val interest: Double, val strategy: String)
+data class Plan(val configured: Boolean, val rec: Double, val over: Boolean, val months: Int?, val interest: Double, val strategy: String,
+    val payoff: Map<String, Int> = emptyMap())
 
 fun debtPlan(d: JsonObject): Plan {
     val s = d.obj("debtPlan")
@@ -268,7 +272,7 @@ fun debtPlan(d: JsonObject): Plan {
     val cap = max(0.0, inc - ess - cu)
     val pp = (s.num("paymentPercent").takeIf { it > 0 } ?: 60.0).coerceIn(30.0, 85.0)
 
-    class B(var bal: Double, val min: Double, val mr: Double, val known: Boolean)
+    class B(val id: String, var bal: Double, val min: Double, val mr: Double, val known: Boolean)
     val ds = d.arr("debts").map { x ->
         val cur = x.str("currency")
         val bal = max(0.0, usdOf(d, x.num("amount") - x.num("paid"), cur))
@@ -277,7 +281,7 @@ fun debtPlan(d: JsonObject): Plan {
         val known = ik == true || (x["interestKnown"] == null && x.num("interestRate") > 0)
         val r = if (known) max(0.0, x.num("interestRate")) / 100 else 0.0
         val mr = if (!known) 0.0 else if (x.str("interestPeriod") == "semanal") (1 + r).pow(52.0 / 12) - 1 else r
-        B(bal, mn, mr, known)
+        B(x.id, bal, mn, mr, known)
     }.filter { it.bal > .005 }
 
     val minT = ds.sumOf { it.min }
@@ -287,7 +291,8 @@ fun debtPlan(d: JsonObject): Plan {
     val over = minT > cap + .01
     if (!configured || ds.isEmpty() || ds.any { it.min <= .005 } || over || rec <= 0) return Plan(configured, rec, over, null, 0.0, strategy)
 
-    val b = ds.map { B(it.bal, it.min, it.mr, it.known) }
+    val b = ds.map { B(it.id, it.bal, it.min, it.mr, it.known) }
+    val payoff = mutableMapOf<String, Int>()
     val total = b.sumOf { it.bal }
     var m = 0
     var int = 0.0
@@ -308,9 +313,10 @@ fun debtPlan(d: JsonObject): Plan {
             if (bud <= .005) break
             val p = min(x.bal, bud); x.bal -= p; bud -= p
         }
+        for (x in b) if (x.bal <= .02 && x.id !in payoff) payoff[x.id] = m
         if (m > 12 && b.sumOf { it.bal } >= total) break
     }
-    return if (b.none { it.bal > .02 }) Plan(true, rec, false, m, int, strategy) else Plan(true, rec, false, null, 0.0, strategy)
+    return if (b.none { it.bal > .02 }) Plan(true, rec, false, m, int, strategy, payoff) else Plan(true, rec, false, null, 0.0, strategy, payoff)
 }
 
 // ---------- Mantenimiento al cargar (igual que load() + genRecurring() en la web) ----------

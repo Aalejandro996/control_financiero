@@ -121,6 +121,10 @@ class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHos
     var pagosSub by mutableStateOf("pagos")
     var q by mutableStateOf("")
     var mon by mutableStateOf("")
+    var fcat by mutableStateOf("")
+    var deudasSub by mutableStateOf("debo")
+    var calYm by mutableStateOf(java.time.YearMonth.now())
+    var calDay by mutableIntStateOf(0)
 
     val fmt: Fmt get() = Fmt(hide, repo.data.str("currency") == "BS", rateOf(repo.data))
 
@@ -250,6 +254,7 @@ fun Main(
         }
     }
     SheetHost(st)
+    TermsDialog(st)
 }
 
 @Composable

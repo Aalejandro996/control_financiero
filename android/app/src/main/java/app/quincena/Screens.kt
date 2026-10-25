@@ -145,6 +145,12 @@ fun Inicio(st: AppState) {
 
     // Resumen en mosaicos: cada uno lleva al detalle
     val tiles = mutableListOf<TileData>()
+    val accs = accounts(d)
+    if (accs.isNotEmpty()) tiles += TileData("Tu dinero", "≈ " + f.show(totalUsd(d)), "${accs.size} ${if (accs.size == 1) "cuenta" else "cuentas"}") {
+        st.movSub = "cuentas"; st.go("movimientos")
+    }
+    val teDeben = d.arr("receivables").filter { it.num("paid") < it.num("amount") }.sumOf { usdOf(d, it.num("amount") - it.num("paid"), it.str("currency")) }
+    if (teDeben > .005) tiles += TileData("Te deben", f.show(teDeben), "toca para ver quién", p.g) { st.deudasSub = "medeben"; st.go("deudas") }
     d.arr("plannedDebtPayments").filter { it.str("status") == "planned" && dateOf(it.str("scheduledDate")) != null }
         .minByOrNull { it.str("scheduledDate")!! }?.let { next ->
             val days = daysUntil(dateOf(next.str("scheduledDate"))!!)
@@ -174,7 +180,7 @@ fun Inicio(st: AppState) {
             TileData("Brecha BCV / USDT", "${if (gap > 0) "+" else ""}$gap %", "toca para ver tu costo real") { st.open("info:tasas") }
         }
     }
-    val sv = d.num("bsSavings")
+    val sv = savingsBs(d)
     if (sv > 0) {
         val ref = rateRef(d)
         tiles += if (ref != null && rateOf(d) > 0) {
@@ -227,15 +233,16 @@ fun PresRows(st: AppState, all: Boolean) {
     val d = st.repo.data
     val f = st.fmt
     val p = pal
-    val c = monthSummary(d)
+    val cat = periodCats(d, st.per)
+    val fr = if (st.per.half == 0) 1.0 else 0.5 // el presupuesto es mensual: por quincena se usa la mitad
     val b = d.obj("budgets")
-    var ks = CATS.keys.filter { b.num(it) > 0 }.map { k -> Triple(k, c.cat[k] ?: 0.0, min(100.0, (c.cat[k] ?: 0.0) / b.num(k) * 100)) }
+    var ks = CATS.keys.filter { b.num(it) > 0 }.map { k -> Triple(k, cat[k] ?: 0.0, min(100.0, (cat[k] ?: 0.0) / (b.num(k) * fr) * 100)) }
     if (!all) ks = ks.sortedByDescending { it.third }.take(3)
     ks.forEach { (k, sp, pct) ->
         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(CATS[k]!!, fontSize = 14.sp)
-                Mut("${f.show(sp)} de ${f.show(b.num(k))}")
+                Mut("${f.show(sp)} de ${f.show(b.num(k) * fr)}")
             }
             Bar(pct / 100, color = if (pct >= 95) p.bad else if (pct >= 80) p.warn else p.g, height = 6.dp)
         }
@@ -247,26 +254,26 @@ fun PresRows(st: AppState, all: Boolean) {
 @Composable
 fun TuMesCard(st: AppState) {
     val d = st.repo.data
-    val c = monthSummary(d)
-    val tot = c.cat.values.sum()
+    val cc = periodCats(d, st.per)
+    val tot = cc.values.sum()
     val nb = CATS.keys.count { d.obj("budgets").num(it) > 0 }
     if (tot <= 0 && nb == 0) return
-    val ks = CATS.keys.filter { (c.cat[it] ?: 0.0) > 0 }.sortedByDescending { c.cat[it] }
+    val ks = CATS.keys.filter { (cc[it] ?: 0.0) > 0 }.sortedByDescending { cc[it] }
     QCard {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            B("Tu mes")
+            B(if (st.per.half == 0) "Tu mes" else "Tu quincena")
             if (nb > 3) Link("Ver todo", { st.open("info:pres") })
         }
         if (tot > 0) {
             Row(Modifier.fillMaxWidth().height(10.dp).clip(CircleShape)) {
-                ks.forEach { k -> Box(Modifier.weight((c.cat[k]!! / tot).toFloat()).fillMaxHeight().background(Color(CAT_COLORS[k]!!))) }
+                ks.forEach { k -> Box(Modifier.weight((cc[k]!! / tot).toFloat()).fillMaxHeight().background(Color(CAT_COLORS[k]!!))) }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 ks.take(4).forEach { k ->
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         Box(Modifier.size(9.dp).clip(CircleShape).background(Color(CAT_COLORS[k]!!)))
                         Text(CATS[k]!!, fontSize = 13.sp)
-                        Text("${Math.round(c.cat[k]!! / tot * 100)} %", fontSize = 13.sp, color = pal.mut)
+                        Text("${Math.round(cc[k]!! / tot * 100)} %", fontSize = 13.sp, color = pal.mut)
                     }
                 }
                 if (ks.size > 4) Text("+${ks.size - 4} más", fontSize = 13.sp, color = pal.mut)
@@ -376,6 +383,7 @@ fun Movimientos(st: AppState) {
     Chips {
         Chip("Gastos", st.movSub == "gastos") { st.movSub = "gastos" }
         Chip("Ingresos", st.movSub == "ingresos") { st.movSub = "ingresos" }
+        Chip("Cuentas", st.movSub == "cuentas") { st.movSub = "cuentas" }
         Chip("Fijos", st.movSub == "fijos") { st.movSub = "fijos" }
     }
     when (st.movSub) {
@@ -392,50 +400,9 @@ fun Movimientos(st: AppState) {
             }
             Btn("Agregar gasto fijo", { st.open("recurrente") })
         }
-        "ingresos" -> {
-            QCard {
-                Items(d.arr("incomeSources"), "Agrega tu sueldo u otros ingresos para ver cuánto te queda.") { s ->
-                    Column(Modifier.weight(1f)) {
-                        B(s.str("name") ?: "Ingreso")
-                        Mut(freqLabel(s.str("frequency")))
-                    }
-                    Amt(f.orig(s.num("amount"), s.str("currency")))
-                    Link("Editar", { st.open("editari", s.id) })
-                }
-            }
-            Btn("Agregar ingreso", { st.open("ingreso") })
-        }
-        else -> {
-            val now = YearMonth.now().toString()
-            val months = (listOf(now) + d.arr("expenses").mapNotNull { it.str("date")?.take(7) }.filter { it.length == 7 }).distinct().sortedDescending()
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    st.q, { st.q = it }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(12.dp), colors = fieldColors(),
-                    placeholder = { Text("Buscar gasto", color = pal.mut) },
-                )
-                Box(Modifier.width(150.dp)) {
-                    SelectBox(listOf("" to "Todos") + months.map { it to monthShort(it) }, st.mon) { st.mon = it }
-                }
-            }
-            val qq = st.q.trim().lowercase()
-            val list = d.arr("expenses").filter { e ->
-                (st.mon.isEmpty() || e.str("date")?.take(7) == st.mon) &&
-                    (qq.isEmpty() || (e.str("description") ?: "").lowercase().contains(qq) || (CATS[e.str("category")] ?: "").lowercase().contains(qq))
-            }.take(100)
-            QCard {
-                Items(list, "Aún no registras gastos. Toca + para agregar el primero.") { e ->
-                    Column(Modifier.weight(1f)) {
-                        B(e.str("description")?.takeIf { it.isNotBlank() } ?: CATS[e.str("category")] ?: "Gasto")
-                        val rt = e.str("rateType")
-                        val tasa = if (e.str("currency") == "BS" && rt != null && rt != "bcv")
-                            " · tasa ${RATE_LABELS[rt] ?: rt} ${f.plain(e.num("rateUsed"))} ≈ ${f.show(realUsd(d, e))}" else ""
-                        Mut("${CATS[e.str("category")] ?: "Otros"} · ${dateOf(e.str("date"))?.let { shortDate(it) } ?: ""}$tasa")
-                    }
-                    Amt(f.orig(e.num("amount"), e.str("currency")))
-                    Link("Editar", { st.open("editar", e.id) })
-                }
-            }
-        }
+        "ingresos" -> IngresosView(st)
+        "cuentas" -> CuentasView(st)
+        else -> GastosView(st)
     }
 }
 
@@ -472,6 +439,11 @@ fun Deudas(st: AppState) {
     val f = st.fmt
     val plan = debtPlan(d)
     Head(st)
+    Chips {
+        Chip("Debo", st.deudasSub != "medeben") { st.deudasSub = "debo" }
+        Chip("Me deben", st.deudasSub == "medeben") { st.deudasSub = "medeben" }
+    }
+    if (st.deudasSub == "medeben") { MeDebenView(st); return }
     QCard {
         B("Tu plan para salir de deudas")
         if (plan.configured) {
@@ -490,7 +462,8 @@ fun Deudas(st: AppState) {
             val paid = x.num("paid")
             Column(Modifier.weight(1f)) {
                 B(x.str("entity") ?: "Deuda")
-                Mut("${x.str("description")?.let { "$it " } ?: ""}Debes ${f.orig(amount - paid, x.str("currency"))} de ${f.orig(amount, x.str("currency"))}")
+                Mut("${x.str("description")?.let { "$it " } ?: ""}Debes ${f.orig(amount - paid, x.str("currency"))} de ${f.orig(amount, x.str("currency"))}" +
+                    (if (amount - paid > .005) payoffText(d, x, plan) else ""))
                 Spacer(Modifier.height(6.dp))
                 Bar(if (amount > 0) paid / amount else 0.0)
             }
@@ -512,6 +485,7 @@ fun Pagos(st: AppState) {
     val d = st.repo.data
     val f = st.fmt
     Head(st)
+    Calendario(st)
     Chips {
         Chip("Próximos pagos", st.pagosSub == "pagos") { st.pagosSub = "pagos" }
         Chip("Compromisos", st.pagosSub == "compromisos") { st.pagosSub = "compromisos" }
@@ -593,12 +567,13 @@ fun Mas(st: AppState) {
     }
 
     Head(st)
-    BolsaMasCard(st)
+    MisCuentasCard(st)
+    if (bsBalance(repo.data) == null) BolsaMasCard(st)
     DetectarCard(st)
     HabitoCard(st)
     QCard {
         B("Mi presupuesto")
-        Mut("Cuánto quieres gastar al mes, en dólares.")
+        Mut("Cuánto quieres gastar al mes, en dólares. En Inicio lo ves por quincena (la mitad).")
         Btn("Editar presupuesto", { st.open("presupuesto") }, outline = true)
     }
     QCard {
@@ -619,6 +594,7 @@ fun Mas(st: AppState) {
         }, outline = true)
         Mut("Te avisamos 7, 4 y 1 día antes de cada pago programado o compromiso, y el mismo día.")
     }
+    SeguridadCard(st)
     QCard {
         B("Eliminar mi cuenta")
         Mut("Borra para siempre tu cuenta y todos tus datos.")
@@ -627,7 +603,6 @@ fun Mas(st: AppState) {
     QCard {
         B("Mis datos")
         Btn("Descargar mis datos", { save.launch("quincena-mis-datos.json") }, outline = true)
-        Link("Términos y privacidad", { st.open("legal") })
     }
     QCard {
         B(repo.username.ifEmpty { "Mi cuenta" })
@@ -636,4 +611,5 @@ fun Mas(st: AppState) {
             st.scope.launch { Reminders.disable(ctx); repo.setPref("avisos", null); repo.setPref("lock", null); st.go("inicio"); repo.logout() }
         }, outline = true)
     }
+    LegalCard()
 }

@@ -15,17 +15,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-// BORRADOR: revisar con un abogado antes de publicar (mismo texto de la web).
-const val CONTACTO = "[escribe aquí tu correo de contacto]"
+// Resumen de los términos (versión completa en /terminos, /privacidad y /cookies de la web).
+// BORRADOR: revisar con un abogado antes de publicar.
 val LEGAL = listOf(
-    "Qué datos guardamos" to "Tu usuario, tu correo y la información financiera que tú registras: ingresos, gastos, deudas, pagos y compromisos.",
-    "Para qué los usamos" to "Solo para que Quincena funcione: mostrarte tus cuentas, enviarte avisos de pago y el correo para recuperar tu contraseña. No vendemos tus datos ni los usamos para publicidad.",
-    "Quién más interviene" to "El servicio donde se aloja la app, Gmail para enviar correos y un servicio público para consultar el dólar BCV, que no recibe tus datos personales.",
-    "Seguridad" to "Tu contraseña se guarda cifrada y la conexión es segura. Ninguna medida es infalible, por eso te pedimos elegir una contraseña larga y no compartirla.",
-    "Tus derechos" to "Puedes descargar tus datos, corregirlos y eliminar tu cuenta cuando quieras desde Más. Al eliminarla, se borran tu cuenta y tus datos.",
-    "Importante" to "Quincena es una herramienta para organizarte. No ofrece asesoría financiera, legal ni contable, y sus cálculos son estimados.",
-    "Tu cuenta" to "Eres responsable de tu contraseña y de que la información que registras sea correcta.",
-    "Cambios y contacto" to "Si cambiamos estos textos, te avisaremos en la app. Para consultas escríbenos a $CONTACTO.",
+    "Qué es Quincena" to "Una herramienta gratuita para organizar tu dinero. No ofrece asesoría financiera, legal ni contable: sus cálculos son estimaciones y las decisiones son tuyas.",
+    "Qué datos guardamos" to "Tu usuario, tu correo y la información financiera que tú registras: ingresos, gastos, cuentas, deudas, préstamos, pagos y compromisos. Nunca registres claves bancarias, PIN ni datos de tarjetas.",
+    "Para qué los usamos" to "Solo para que Quincena funcione: mostrarte tus cuentas, sincronizarlas, enviarte avisos y recuperar tu contraseña. No vendemos tus datos ni los usamos para publicidad.",
+    "Quién más interviene" to "El servidor donde se aloja Quincena, el servicio de correo para recuperar tu contraseña y un servicio público de tasas (BCV y USDT) que no recibe tus datos.",
+    "Seguridad" to "Conexión cifrada, contraseña guardada con hash y, en el teléfono, datos cifrados con una llave que no sale del equipo. Puedes exigir huella o rostro y cerrar la sesión en tus otros teléfonos desde Más.",
+    "Tus derechos" to "Puedes ver, corregir, descargar y eliminar tus datos cuando quieras desde Más (Constitución de Venezuela, artículos 28 y 60).",
+    "Tu cuenta" to "Debes tener 18 años o más. Eres responsable de tu contraseña y de lo que registras.",
+    "Cambios" to "Si cambiamos estos términos, te lo avisaremos en la app y te pediremos aceptarlos de nuevo.",
 )
 
 @Composable
@@ -33,6 +33,9 @@ fun LegalText() {
     LEGAL.forEach { (t, b) ->
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { B(t); Mut(b) }
     }
+    Mut("Lee la versión completa:")
+    LegalLinks()
+    Text(copyright(), fontSize = 13.sp, color = pal.mut)
 }
 
 private fun friendly(e: Exception): String = when (e) {
@@ -107,6 +110,7 @@ fun AuthScreen(st: AppState) {
                     when {
                         user.isBlank() || email.isBlank() -> error = "Completa usuario y correo."
                         pass.length < 12 -> error = "Usa una contraseña de al menos 12 caracteres."
+                        pass.lowercase().contains(user.trim().lowercase()) -> error = "La contraseña no debe contener tu nombre de usuario."
                         !accept -> error = "Debes aceptar los términos y la política de privacidad para crear tu cuenta."
                         else -> submit { st.repo.register(user, email, pass) }
                     }
@@ -127,6 +131,7 @@ fun AuthScreen(st: AppState) {
                 } else Link(if (mode == "registro") "Ya tengo cuenta" else "Volver", { error = null; mode = "login" })
                 Link("Leer términos y privacidad", { back = mode; mode = "legal" })
             }
+            Text(copyright(), Modifier.fillMaxWidth(), fontSize = 12.sp, color = p.mut, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
     }

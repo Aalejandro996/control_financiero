@@ -67,8 +67,8 @@ class ControlFinancieroSmokeTest(unittest.TestCase):
             self.assertEqual(changed.status_code, 200, changed.get_json())
             return client, changed.get_json()["csrf_token"]
 
-        member1, member1_csrf = authenticated_member("memberone", member1_response.get_json()["temporary_password"], "memberone-new-secure-password-987")
-        member2, _member2_csrf = authenticated_member("membertwo", member2_response.get_json()["temporary_password"], "membertwo-new-secure-password-987")
+        member1, member1_csrf = authenticated_member("memberone", member1_response.get_json()["temporary_password"], "quiet-river-lamp-secure-987")
+        member2, _member2_csrf = authenticated_member("membertwo", member2_response.get_json()["temporary_password"], "bright-stone-cloud-secure-654")
 
         # Each member sees an empty, independent state — never the admin's records.
         member1_state_response = self.json(member1, "/api/state")
