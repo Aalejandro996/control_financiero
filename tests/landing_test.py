@@ -31,7 +31,7 @@ r = visitor.get("/")
 html = r.get_data(as_text=True)
 check("sin sesión, / muestra la presentación", r.status_code == 200 and "Controla tu quincena" in html and "authView" not in html)
 check("la respuesta varía según la sesión (Vary: Cookie)", "Cookie" in r.headers.get("Vary", ""))
-check("tiene título y descripción para Google", "<title>Quincena:" in html and 'name="description"' in html)
+check("tiene título y descripción para Google", "<title>Quincena VE:" in html and 'name="description"' in html)
 check("tiene un solo h1", len(re.findall(r"<h1[ >]", html)) == 1)
 ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.S).group(1))
 types = {node["@type"] for node in ld["@graph"]}

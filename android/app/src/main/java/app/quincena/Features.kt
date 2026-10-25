@@ -373,7 +373,7 @@ fun DetectarCard(st: AppState) {
     val ctx = LocalContext.current
     QCard {
         B("Registrar desde un mensaje del banco")
-        Mut("En el SMS o la notificación de tu banco o pago móvil: mantén presionado › Compartir › Quincena. El gasto se abre ya escrito con el monto y el comercio.")
+        Mut("En el SMS o la notificación de tu banco o pago móvil: mantén presionado › Compartir › Quincena VE. El gasto se abre ya escrito con el monto y el comercio.")
         Mut("¿Tu banco no deja compartir? Copia el mensaje y toca este botón:")
         Btn("Pegar mensaje copiado", {
             val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)

@@ -139,7 +139,7 @@ class HabitWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         val today = LocalDate.now()
         if (today.dayOfWeek == DayOfWeek.SUNDAY) {
             val s = semana(d)
-            if (s.n > 0) notify(ctx, 7001, "Tu semana en Quincena",
+            if (s.n > 0) notify(ctx, 7001, "Tu semana en Quincena VE",
                 "Gastaste ${Fmt(false, false, 1.0).orig(s.total, "USD")} en ${s.n} gastos. Lo que más: ${CATS[s.topCat] ?: "Otros"} (${s.topPct} %).")
         }
         if (d.arr("expenses").none { localDay(it) == today })

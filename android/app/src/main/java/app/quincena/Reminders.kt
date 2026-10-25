@@ -163,8 +163,8 @@ class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             val r = runCatching { Api(store).call("GET", "/api/android-app") }.getOrNull()
             val code = (r?.get("versionCode") as? JsonPrimitive)?.intOrNull ?: 0
             if (r != null && r.bool("available") == true && code > BuildConfig.VERSION_CODE) {
-                val notes = r.str("notes")?.takeIf { it.isNotBlank() } ?: "Abre Quincena y toca Actualizar."
-                once("upd_$code", "Quincena ${r.str("version") ?: "nueva"} disponible", notes, news = true)
+                val notes = r.str("notes")?.takeIf { it.isNotBlank() } ?: "Abre Quincena VE y toca Actualizar."
+                once("upd_$code", "Quincena VE ${r.str("version") ?: "nueva"} disponible", notes, news = true)
             }
         }
         // Limpia avisos viejos para que el archivo no crezca sin fin.

@@ -28,7 +28,7 @@ admin.post("/api/setup", json={"bootstrap_token": "b" * 32, "username": "admin",
 def register(name, ip, source=None, agent="Mozilla/5.0"):
     c = A.app.test_client()
     r = c.post("/api/register", json={"username": name, "email": f"{name}@x.com", "password": "Zorro-Plata-55231x", "accept_terms": True, **({"source": source} if source is not None else {})},
-               headers={"X-Forwarded-For": ip, "User-Agent": agent})
+               headers={"X-Forwarded-For": ip, "User-Agent": agent, "X-App-Version": "100000"})
     assert r.status_code == 200, r.get_json()
     return c
 

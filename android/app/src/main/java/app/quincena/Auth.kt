@@ -18,10 +18,10 @@ import kotlinx.coroutines.launch
 // Resumen de los términos (versión completa en /terminos, /privacidad y /cookies de la web).
 // BORRADOR: revisar con un abogado antes de publicar.
 val LEGAL = listOf(
-    "Qué es Quincena" to "Una herramienta gratuita para organizar tu dinero. No ofrece asesoría financiera, legal ni contable: sus cálculos son estimaciones y las decisiones son tuyas.",
+    "Qué es Quincena VE" to "Una herramienta gratuita para organizar tu dinero. No ofrece asesoría financiera, legal ni contable: sus cálculos son estimaciones y las decisiones son tuyas.",
     "Qué datos guardamos" to "Tu usuario, tu correo y la información financiera que tú registras: ingresos, gastos, cuentas, deudas, préstamos, pagos y compromisos. Nunca registres claves bancarias, PIN ni datos de tarjetas.",
-    "Para qué los usamos" to "Solo para que Quincena funcione: mostrarte tus cuentas, sincronizarlas, enviarte avisos y recuperar tu contraseña. No vendemos tus datos ni los usamos para publicidad.",
-    "Quién más interviene" to "El servidor donde se aloja Quincena, el servicio de correo para recuperar tu contraseña y servicios públicos de tipo de cambio según tu país, que no reciben tus datos.",
+    "Para qué los usamos" to "Solo para que Quincena VE funcione: mostrarte tus cuentas, sincronizarlas, enviarte avisos y recuperar tu contraseña. No vendemos tus datos ni los usamos para publicidad.",
+    "Quién más interviene" to "El servidor donde se aloja Quincena VE, el servicio de correo para recuperar tu contraseña y servicios públicos de tipo de cambio según tu país, que no reciben tus datos.",
     "Seguridad" to "Conexión cifrada, contraseña guardada con hash y, en el teléfono, datos cifrados con una llave que no sale del equipo. Puedes exigir huella o rostro y cerrar la sesión en tus otros teléfonos desde Más.",
     "Tus derechos" to "Puedes ver, corregir, descargar y eliminar tus datos cuando quieras desde Más (Constitución de Venezuela, artículos 28 y 60).",
     "Tu cuenta" to "Debes tener 18 años o más. Eres responsable de tu contraseña y de lo que registras.",
@@ -79,7 +79,7 @@ fun AuthScreen(st: AppState) {
                 LegalText()
                 Btn("Volver", { mode = back })
             } else {
-            Title("Quincena", 36.sp)
+            Title("Quincena VE 🇻🇪", 36.sp)
             Mut(when (mode) {
                 "registro" -> "Crea tu cuenta gratis."
                 "olvide" -> "Te enviaremos un enlace para elegir una contraseña nueva."

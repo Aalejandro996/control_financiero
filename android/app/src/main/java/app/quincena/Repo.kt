@@ -13,7 +13,7 @@ import kotlinx.serialization.json.*
  * Datos del usuario guardados en el teléfono (cifrados). Se editan sin conexión y se sincronizan con el
  * mismo protocolo de la web: se envían los datos, la copia base y la revisión, y el servidor mezcla.
  */
-data class AppUpdate(val version: String, val notes: String, val url: String)
+data class AppUpdate(val version: String, val notes: String, val url: String, val required: Boolean = false)
 
 class Repo(ctx: Context) {
     private val store = SecureStore(ctx)
@@ -172,8 +172,10 @@ class Repo(ctx: Context) {
     suspend fun checkUpdate(): AppUpdate? = runCatching {
         val r = api.call("GET", "/api/android-app")
         val code = (r["versionCode"] as? JsonPrimitive)?.intOrNull ?: 0
+        val min = (r["minVersionCode"] as? JsonPrimitive)?.intOrNull ?: 0
         if (r.bool("available") == true && code > BuildConfig.VERSION_CODE)
-            AppUpdate(r.str("version") ?: "nueva", r.str("notes") ?: "", BuildConfig.API_BASE + (r.str("url") ?: "/descargar/android"))
+            AppUpdate(r.str("version") ?: "nueva", r.str("notes") ?: "", BuildConfig.API_BASE + (r.str("url") ?: "/descargar/android"),
+                required = min > BuildConfig.VERSION_CODE)
         else null
     }.getOrNull()
 

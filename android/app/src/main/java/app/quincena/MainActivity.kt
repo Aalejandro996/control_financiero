@@ -98,7 +98,7 @@ class MainActivity : FragmentActivity() {
         prompting = true
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Desbloquear Quincena")
+                .setTitle("Desbloquear Quincena VE")
                 .setSubtitle("Usa tu huella, tu rostro o el bloqueo del teléfono")
                 .setAllowedAuthenticators(BIOMETRIC_WEAK or DEVICE_CREDENTIAL)
                 .build()
@@ -168,10 +168,12 @@ fun App(
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val st = remember { AppState(repo, scope, snack) }
+    LaunchedEffect(resumes) { st.update = repo.checkUpdate() }
     QuincenaTheme {
         val p = pal
         Box(Modifier.fillMaxSize().background(p.bg)) {
             when {
+                UpdateGate.required || st.update?.required == true -> ForceUpdateScreen(st.update)
                 !repo.loggedIn -> AuthScreen(st)
                 lock.locked -> LockScreen(unlock)
                 else -> Main(st, resumes, shared, onShared, startAction, onStartAction)
@@ -190,9 +192,30 @@ fun LockScreen(unlock: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Title("Quincena", 36.sp)
+        Title("Quincena VE 🇻🇪", 36.sp)
         Mut("Tus finanzas, solo para ti.")
         Btn("Desbloquear", unlock)
+    }
+}
+
+/** Pantalla que no se puede saltar cuando el servidor exige una versión más nueva de la app. */
+@Composable
+fun ForceUpdateScreen(u: AppUpdate?) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val url = u?.url ?: (BuildConfig.API_BASE + "/descargar/android")
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Title("Quincena VE 🇻🇪", 36.sp)
+        B("Actualiza para continuar")
+        Mut("Hay una versión nueva${u?.let { " (${it.version})" } ?: ""} y esta ya no es compatible. Toca Actualizar, abre el archivo descargado e instálalo encima: no pierdes tus datos.")
+        u?.notes?.takeIf { it.isNotBlank() }?.let { Mut(it) }
+        Btn("Actualizar", {
+            ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        })
+        Mut("Versión instalada: ${BuildConfig.VERSION_NAME}")
     }
 }
 
@@ -216,7 +239,6 @@ fun Main(
     }
     LaunchedEffect(resumes) {
         st.detected = Detected.load(ctx)
-        st.update = st.repo.checkUpdate()
         st.repo.refresh()?.let { st.toast(it) }
         if (!st.repo.loggedIn) return@LaunchedEffect
         st.rateInfo = st.repo.updateRate()
@@ -288,7 +310,7 @@ fun Head(st: AppState) {
     val today = LocalDate.now()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Title("Quincena")
+            Title("Quincena VE")
             Mut("${if (today.dayOfMonth <= 15) "1.ª" else "2.ª"} quincena de ${monthName(java.time.YearMonth.from(today))}")
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

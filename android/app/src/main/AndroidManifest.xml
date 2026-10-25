@@ -7,7 +7,7 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="Quincena"
+        android:label="Quincena VE"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
@@ -20,7 +20,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- "Compartir > Quincena" desde el SMS o la notificación del banco -->
-            <intent-filter android:label="Registrar gasto en Quincena">
+            <intent-filter android:label="Registrar gasto en Quincena VE">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />

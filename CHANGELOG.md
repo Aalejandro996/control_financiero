@@ -8,6 +8,31 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · actualización obligatoria] — 25 oct 2026
+
+### Agregado
+- **Servidor — Versión mínima de la app:** si una petición de la app Android llega con una versión menor que la mínima,
+  responde 426 con el aviso "Hay una versión nueva… Actualízala para seguir usándola" y no entrega datos. La app manda
+  su versión en `X-App-Version`; las versiones 1.14 y anteriores no la mandan y cuentan como viejas. Siguen abiertas
+  `/api/android-app`, `/api/status`, `/api/countries`, `/api/rate` y la descarga del APK. La web no se ve afectada.
+- **Variable `ANDROID_MIN_VERSION` en Render:** `latest` (por defecto) exige siempre la última versión publicada; un
+  número fija esa versión mínima; `0` u `off` lo apaga. Pruebas: `tests/app_update_test.py`.
+- **Android:** pantalla "Actualiza para continuar" que no se puede saltar, con el botón Actualizar. Aparece si
+  `/api/android-app` dice que la versión instalada es menor que la mínima (se revisa al abrir, antes de entrar) o si
+  cualquier petición recibe 426.
+
+## [Sin publicar · Quincena VE 🇻🇪] — 25 oct 2026
+
+### Cambiado
+- **Nombre: Quincena VE.** En el ícono del teléfono, el menú Compartir, la pestaña del navegador, el manifest, los correos
+  y las notificaciones va "Quincena VE"; en las pantallas de entrada y en la presentación, "Quincena VE 🇻🇪". Google
+  Play no admite emojis en el título de la ficha, por eso la bandera no va en el nombre corto.
+- **Ícono nuevo:** la Q con los colores de la bandera de Venezuela en tercios iguales, las 8 estrellas en arco y la cola
+  en el verde de la marca, sobre fondo blanco. Lo genera `tools/icons.py` para la web y para Android (incluidos los
+  vectores del ícono adaptativo y la capa monocromática).
+- Los identificadores internos no cambian (`app.quincena`, `QuincenaTheme`, rutas y nombres de archivo), así que la
+  app se actualiza encima sin desinstalar.
+
 ## [Sin publicar · página de presentación y Gigadevs] — 25 oct 2026
 
 ### Agregado

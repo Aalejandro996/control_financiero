@@ -1,11 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Ícono de la app: la "Q" de Quincena (anillo blanco y cola menta), el mismo diseño de tools/icons.py.
-     Lienzo de 108dp; la figura cabe en el círculo seguro de 66dp para que ningún launcher la recorte. -->
+<!-- Ícono de Quincena VE: la Q con la bandera de Venezuela (tercios iguales y 8 estrellas) y la cola verde. Generado por tools/icons.py. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="8.12" android:fillColor="#00000000"
-        android:pathData="M33.98,51.2 a17.08,17.08 0 1,0 34.16,0 a17.08,17.08 0 1,0 -34.16,0" />
-    <path android:strokeColor="#FFBFF0D8" android:strokeWidth="8.12" android:fillColor="#00000000"
-        android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M53.3,64.36 L62.82,73.88 L74.02,73.88" />
+    <group>
+        <clip-path android:pathData="M0,0.00h108v44.20h-108z" />
+        <path android:strokeColor="#FFFFCC00" android:strokeWidth="8.12" android:fillColor="#00000000"
+            android:pathData="M33.98,51.20 a17.08,17.08 0 1,0 34.16,0 a17.08,17.08 0 1,0 -34.16,0" />
+    </group>
+    <group>
+        <clip-path android:pathData="M0,44.20h108v14.00h-108z" />
+        <path android:strokeColor="#FF00247D" android:strokeWidth="8.12" android:fillColor="#00000000"
+            android:pathData="M33.98,51.20 a17.08,17.08 0 1,0 34.16,0 a17.08,17.08 0 1,0 -34.16,0" />
+    </group>
+    <group>
+        <clip-path android:pathData="M0,58.20h108v49.80h-108z" />
+        <path android:strokeColor="#FFCF142B" android:strokeWidth="8.12" android:fillColor="#00000000"
+            android:pathData="M33.98,51.20 a17.08,17.08 0 1,0 34.16,0 a17.08,17.08 0 1,0 -34.16,0" />
+    </group>
+    <path android:fillColor="#FF00247D" android:pathData="M42.90,51.03 L43.39,52.33 L44.77,52.39 L43.69,53.25 L44.06,54.58 L42.90,53.81 L41.75,54.58 L42.12,53.25 L41.04,52.39 L42.42,52.33 Z M44.41,48.42 L44.89,49.71 L46.27,49.77 L45.19,50.63 L45.56,51.97 L44.41,51.20 L43.26,51.97 L43.63,50.63 L42.55,49.77 L43.93,49.71 Z M46.72,46.48 L47.20,47.78 L48.58,47.84 L47.50,48.70 L47.87,50.03 L46.72,49.27 L45.57,50.03 L45.94,48.70 L44.86,47.84 L46.24,47.78 Z M49.55,45.45 L50.04,46.75 L51.42,46.81 L50.34,47.67 L50.70,49.00 L49.55,48.24 L48.40,49.00 L48.77,47.67 L47.69,46.81 L49.07,46.75 Z M52.57,45.45 L53.05,46.75 L54.43,46.81 L53.35,47.67 L53.72,49.00 L52.57,48.24 L51.42,49.00 L51.78,47.67 L50.70,46.81 L52.08,46.75 Z M55.40,46.48 L55.88,47.78 L57.26,47.84 L56.18,48.70 L56.55,50.03 L55.40,49.27 L54.25,50.03 L54.62,48.70 L53.54,47.84 L54.92,47.78 Z M57.71,48.42 L58.19,49.71 L59.57,49.77 L58.49,50.63 L58.86,51.97 L57.71,51.20 L56.56,51.97 L56.93,50.63 L55.85,49.77 L57.23,49.71 Z M59.22,51.03 L59.70,52.33 L61.08,52.39 L60.00,53.25 L60.37,54.58 L59.22,53.81 L58.06,54.58 L58.43,53.25 L57.35,52.39 L58.73,52.33 Z" />
+    <path android:strokeColor="#FF0B6B4D" android:strokeWidth="8.12" android:fillColor="#00000000"
+        android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M53.30,64.36 L62.82,73.88 L74.02,73.88" />
 </vector>

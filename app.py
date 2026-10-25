@@ -1080,12 +1080,55 @@ def android_version() -> dict:
     return info
 
 
+def android_min_version_code() -> int:
+    """Versión mínima de la app que puede usar el servidor. ANDROID_MIN_VERSION en Render:
+    "latest" (por defecto) obliga a usar siempre la última publicada; un número fija esa versión; "0" u "off" lo apaga."""
+    if not APK_PATH.is_file():
+        return 0
+    setting = os.getenv("ANDROID_MIN_VERSION", "latest").strip().lower()
+    if setting in {"", "latest", "ultima", "última"}:
+        return android_version()["versionCode"]
+    if setting in {"0", "off", "no", "false"}:
+        return 0
+    try:
+        return min(int(setting), android_version()["versionCode"])  # nunca exigir una versión que no existe
+    except ValueError:
+        return android_version()["versionCode"]
+
+
+# Rutas que una app desactualizada sigue pudiendo usar: saber que hay versión nueva y descargarla.
+UPDATE_EXEMPT_PATHS = {"/api/android-app", "/api/status", "/api/countries", "/api/rate"}
+
+
+@app.before_request
+def require_current_android_app():
+    """La app Android manda X-App-Version; las versiones viejas (≤1.14) no lo mandan pero se identifican por okhttp.
+    Si la versión es menor que la mínima, no se entregan datos y la app muestra el aviso de actualizar."""
+    if not request.path.startswith("/api/") or request.path in UPDATE_EXEMPT_PATHS:
+        return None
+    raw = request.headers.get("X-App-Version")
+    if raw is None and "okhttp" not in request.headers.get("User-Agent", "").lower():
+        return None  # navegador: la web siempre está al día
+    try:
+        installed = int(raw) if raw is not None else 0
+    except ValueError:
+        installed = 0
+    minimum = android_min_version_code()
+    if installed >= minimum:
+        return None
+    info = android_version()
+    return jsonify(error=f"Hay una versión nueva de Quincena VE ({info['version']}). Actualízala para seguir usándola: toca Actualizar en Inicio.",
+                   code="update_required", minVersionCode=minimum, version=info["version"],
+                   url=f"/descargar/android?v={info['versionCode']}"), 426
+
+
 @app.get("/api/android-app")
 def android_app_info():
     if not APK_PATH.is_file():
         return jsonify(available=False)
     info = android_version()
     return jsonify(available=True, version=info["version"], versionCode=info["versionCode"], notes=info["notes"],
+                   minVersionCode=android_min_version_code(),
                    size_mb=round(APK_PATH.stat().st_size / 1048576, 1), url=f"/descargar/android?v={info['versionCode']}")
 
 
@@ -1122,7 +1165,7 @@ def revoke_devices():
     db.session.commit()
     audit("devices_revoked", f"Sesión cerrada en {n} dispositivo(s)", g.user.id)
     if n:
-        notify_security(g.user, "Se cerraron sesiones en sus dispositivos – Quincena", f"Se cerró la sesión de Quincena en {n} dispositivo(s) de su cuenta, a petición suya.")
+        notify_security(g.user, "Se cerraron sesiones en sus dispositivos – Quincena VE", f"Se cerró la sesión de Quincena VE en {n} dispositivo(s) de su cuenta, a petición suya.")
     return jsonify(ok=True, revoked=n)
 
 
@@ -1171,7 +1214,7 @@ def status():
         authenticated=bool(user),
         csrf_token=session.get("csrf_token"),
         user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password} if user else None,
-        app_name="Quincena", registration_open=registration_open(),
+        app_name="Quincena VE", registration_open=registration_open(),
     )
 
 
@@ -1447,9 +1490,9 @@ def send_mail(to: str, subject: str, body: str, html_body: str | None = None) ->
     if api_key:
         name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
         if not addr:
-            app.logger.error("Correo no enviado: MAIL_FROM debe ser un remitente verificado en Brevo, p. ej. Quincena <tu@correo.com>.")
+            app.logger.error("Correo no enviado: MAIL_FROM debe ser un remitente verificado en Brevo, p. ej. Quincena VE <tu@correo.com>.")
             return False
-        payload = {"sender": {"name": name or "Quincena", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
+        payload = {"sender": {"name": name or "Quincena VE", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
         if html_body:
             payload["htmlContent"] = html_body
         req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode("utf-8"), method="POST",
@@ -1467,7 +1510,7 @@ def send_mail(to: str, subject: str, body: str, html_body: str | None = None) ->
         return False
     message = EmailMessage()
     message["Subject"], message["To"] = subject, to
-    message["From"] = os.getenv("MAIL_FROM") or f"Quincena <{smtp_user}>"
+    message["From"] = os.getenv("MAIL_FROM") or f"Quincena VE <{smtp_user}>"
     message.set_content(body)
     if html_body:
         message.add_alternative(html_body, subtype="html")
@@ -1502,29 +1545,29 @@ def notify_security(user: "User", subject: str, message: str) -> None:
     when = datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "America/Caracas"))).strftime("%d/%m/%Y %H:%M")
     tail = ("Si usted no fue, restablezca su contraseña de inmediato desde la pantalla de acceso («¿Olvidaste tu contraseña?») "
             "y cierre las sesiones de sus otros dispositivos desde Más.")
-    text = f"Estimado/a {user.username}:\n\n{message}\nFecha: {when} (hora de Caracas).\n\n{tail}\n\nAtentamente,\nEl equipo de Quincena"
+    text = f"Estimado/a {user.username}:\n\n{message}\nFecha: {when} (hora de Caracas).\n\n{tail}\n\nAtentamente,\nEl equipo de Quincena VE"
     page = ('<!doctype html><html lang="es"><body style="font-family:Arial,Helvetica,sans-serif;color:#12211B;line-height:1.6">'
             f'<p>Estimado/a <b>{html_escape(user.username)}</b>:</p><p>{html_escape(message)}<br>Fecha: {when} (hora de Caracas).</p>'
-            f'<p>{html_escape(tail)}</p><p>Atentamente,<br>El equipo de Quincena</p></body></html>')
+            f'<p>{html_escape(tail)}</p><p>Atentamente,<br>El equipo de Quincena VE</p></body></html>')
     send_mail_async(user.email, subject, text, page)
 
 
-def reset_email(username: str, link: str, validity: str = "60 minutos", intro: str = "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.", cta: str = "Restablecer contraseña", ignore: str = "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.") -> tuple[str, str]:
+def reset_email(username: str, link: str, validity: str = "60 minutos", intro: str = "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena VE.", cta: str = "Restablecer contraseña", ignore: str = "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.") -> tuple[str, str]:
     """Correo formal de restablecimiento de contraseña: (texto plano, HTML)."""
     text = (
         f"Estimado/a {username}:\n\n"
         f"{intro}\n\n"
         f"Para continuar, abra el siguiente enlace. Tendrá una validez de {validity} y solo podrá utilizarse una vez:\n\n{link}\n\n"
         f"{ignore}\n\n"
-        "Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono.\n\n"
-        "Atentamente,\nEl equipo de Quincena"
+        "Por su seguridad, Quincena VE nunca le solicitará su contraseña por correo electrónico ni por teléfono.\n\n"
+        "Atentamente,\nEl equipo de Quincena VE"
     )
     name, url = html_escape(username), html_escape(link, quote=True)
     page = (
         '<!doctype html><html lang="es"><body style="margin:0;padding:24px;background:#F3F6F2;font-family:Arial,Helvetica,sans-serif;color:#12211B">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">'
         '<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #D5DDD7;border-radius:12px;overflow:hidden">'
-        '<tr><td style="background:#0B6B4D;padding:20px 28px;color:#ffffff;font-size:22px;font-weight:bold">Quincena</td></tr>'
+        '<tr><td style="background:#0B6B4D;padding:20px 28px;color:#ffffff;font-size:22px;font-weight:bold">Quincena VE 🇻🇪</td></tr>'
         '<tr><td style="padding:28px;font-size:16px;line-height:1.6">'
         f'<p style="margin:0 0 16px">Estimado/a <b>{name}</b>:</p>'
         f'<p style="margin:0 0 16px">{html_escape(intro)}</p>'
@@ -1532,8 +1575,8 @@ def reset_email(username: str, link: str, validity: str = "60 minutos", intro: s
         f'<p style="margin:0 0 24px;text-align:center"><a href="{url}" style="display:inline-block;background:#0B6B4D;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:10px">{cta}</a></p>'
         f'<p style="margin:0 0 16px;font-size:14px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all">{url}</span></p>'
         f'<p style="margin:0 0 16px">{html_escape(ignore)}</p>'
-        '<p style="margin:0">Atentamente,<br>El equipo de Quincena</p></td></tr>'
-        '<tr><td style="padding:16px 28px;background:#F3F6F2;font-size:13px;color:#46564E">Por su seguridad, Quincena nunca le solicitará su contraseña por correo electrónico ni por teléfono. Este es un mensaje automático; por favor, no responda a este correo.</td></tr>'
+        '<p style="margin:0">Atentamente,<br>El equipo de Quincena VE</p></td></tr>'
+        '<tr><td style="padding:16px 28px;background:#F3F6F2;font-size:13px;color:#46564E">Por su seguridad, Quincena VE nunca le solicitará su contraseña por correo electrónico ni por teléfono. Este es un mensaje automático; por favor, no responda a este correo.</td></tr>'
         '</table></td></tr></table></body></html>'
     )
     return text, page
@@ -1592,9 +1635,9 @@ def send_verification(user: "User") -> bool:
         return False
     # El código va tras "#": el navegador nunca lo envía al servidor, así no queda en registros ni en cabeceras Referer.
     text_body, html_body = reset_email(user.username, f"{origin}/app#verify={token}", "24 horas",
-                                       "Gracias por crear su cuenta en Quincena. Para activar la recuperación de su contraseña, necesitamos confirmar su correo electrónico.",
+                                       "Gracias por crear su cuenta en Quincena VE. Para activar la recuperación de su contraseña, necesitamos confirmar su correo electrónico.",
                                        "Confirmar correo", "Si usted no creó esta cuenta, puede ignorar este mensaje.")
-    send_mail_async(user.email, "Confirme su correo electrónico – Quincena", text_body, html_body)
+    send_mail_async(user.email, "Confirme su correo electrónico – Quincena VE", text_body, html_body)
     return True
 
 
@@ -1647,7 +1690,7 @@ def mobile_login():
                                last_used_at=now, expires_at=now + timedelta(days=90)))
     db.session.commit()
     audit("login_succeeded", "Inicio de sesión desde la app móvil", user.id)
-    notify_security(user, "Nuevo inicio de sesión en su cuenta – Quincena",
+    notify_security(user, "Nuevo inicio de sesión en su cuenta – Quincena VE",
                     f"Se inició sesión en su cuenta desde la app de Android ({str(body.get('device') or 'dispositivo').strip()[:60]}).")
     return jsonify(ok=True, token=token, user={"username": user.username, "role": user.role})
 
@@ -1677,7 +1720,7 @@ def forgot_password():
         origin = public_origin()
         if origin and mail_configured():
             text_body, html_body = reset_email(user.username, f"{origin}/app#reset={token}")
-            send_mail_async(email, "Restablecimiento de contraseña – Quincena", text_body, html_body)
+            send_mail_async(email, "Restablecimiento de contraseña – Quincena VE", text_body, html_body)
             audit("password_reset_requested", "Enlace solicitado", user.id)
         else:
             app.logger.error("Recuperación de clave sin correo configurado (BREVO_API_KEY/MAIL_FROM/APP_PUBLIC_ORIGIN).")
@@ -1705,7 +1748,7 @@ def reset_password():
     db.session.commit()
     session.clear()
     audit("password_reset_done", "Contraseña restablecida por correo", user.id)
-    notify_security(user, "Su contraseña fue restablecida – Quincena", "La contraseña de su cuenta fue restablecida con el enlace enviado a su correo. Se cerró la sesión en todos sus dispositivos.")
+    notify_security(user, "Su contraseña fue restablecida – Quincena VE", "La contraseña de su cuenta fue restablecida con el enlace enviado a su correo. Se cerró la sesión en todos sus dispositivos.")
     return jsonify(ok=True)
 
 
@@ -1737,7 +1780,7 @@ def change_password():
         session["ps"] = pw_stamp(g.user)  # esta sesión sigue abierta; las demás sesiones web quedan cerradas
     session["csrf_token"] = secrets.token_urlsafe(32)
     audit("password_changed", "Contraseña actualizada; se cerró la sesión en los demás dispositivos", g.user.id)
-    notify_security(g.user, "Su contraseña fue cambiada – Quincena", "La contraseña de su cuenta fue cambiada. Se cerró la sesión en sus demás dispositivos.")
+    notify_security(g.user, "Su contraseña fue cambiada – Quincena VE", "La contraseña de su cuenta fue cambiada. Se cerró la sesión en sus demás dispositivos.")
     return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": g.user.username, "role": g.user.role, "must_change_password": False})
 
 
@@ -1908,7 +1951,7 @@ def reset_user_password(user_id: int):
     user.must_change_password = True
     DeviceToken.query.filter_by(user_id=user.id, revoked_at=None).update({"revoked_at": datetime.now(timezone.utc)})
     db.session.commit()
-    notify_security(user, "Un administrador restableció su contraseña – Quincena", "Un administrador de Quincena restableció la contraseña de su cuenta. Deberá cambiarla al entrar.")
+    notify_security(user, "Un administrador restableció su contraseña – Quincena VE", "Un administrador de Quincena VE restableció la contraseña de su cuenta. Deberá cambiarla al entrar.")
     audit("password_reset_by_admin", f"Contraseña restablecida para {user.username}", g.user.id)
     return jsonify(ok=True, temporary_password=temporary_password)
 

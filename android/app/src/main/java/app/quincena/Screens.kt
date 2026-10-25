@@ -583,7 +583,7 @@ fun Mas(st: AppState) {
             if (lockOn) { repo.setPref("lock", null); lockOn = false; st.toast("Listo: ya no se pedirá la huella.") }
             else {
                 val can = BiometricManager.from(ctx).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-                if (can == BiometricManager.BIOMETRIC_SUCCESS) { repo.setPref("lock", "1"); lockOn = true; st.toast("Listo: Quincena pedirá tu huella o rostro al abrirse.") }
+                if (can == BiometricManager.BIOMETRIC_SUCCESS) { repo.setPref("lock", "1"); lockOn = true; st.toast("Listo: Quincena VE pedirá tu huella o rostro al abrirse.") }
                 else st.toast("Configura una huella, rostro o bloqueo de pantalla en tu teléfono primero.")
             }
         }, outline = true)
@@ -616,7 +616,7 @@ fun Mas(st: AppState) {
     }
     QCard {
         B(repo.username.ifEmpty { "Mi cuenta" })
-        Mut("Quincena ${BuildConfig.VERSION_NAME}")
+        Mut("Quincena VE ${BuildConfig.VERSION_NAME}")
         Btn("Cerrar sesión", {
             st.scope.launch { Reminders.disable(ctx); repo.setPref("avisos", null); repo.setPref("lock", null); st.go("inicio"); repo.logout() }
         }, outline = true)

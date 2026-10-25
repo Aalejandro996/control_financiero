@@ -45,7 +45,7 @@ val KIND_IN = mapOf("sueldo" to "Cobro", "extra" to "Ingreso extra", "cobro" to 
 
 fun copyright(): String {
     val y = LocalDate.now().year
-    return "© ${if (y > 2026) "2026–$y" else "2026"} Quincena. Todos los derechos reservados."
+    return "© ${if (y > 2026) "2026–$y" else "2026"} Quincena VE. Todos los derechos reservados."
 }
 
 /** Convierte un monto entre $ y Bs. con la tasa BCV. */
@@ -512,7 +512,7 @@ fun TermsDialog(st: AppState) {
         title = { Text(if (nuevo) "Antes de empezar" else "Actualizamos los términos", fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 24.sp) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Mut(if (nuevo) "Para usar Quincena, revisa y acepta:" else "Para seguir usando Quincena, revisa y acepta los cambios:")
+                Mut(if (nuevo) "Para usar Quincena VE, revisa y acepta:" else "Para seguir usando Quincena VE, revisa y acepta los cambios:")
                 listOf(
                     "Explicamos mejor qué datos guardamos y para qué. No los vendemos ni mostramos publicidad.",
                     "En la app tus datos se guardan cifrados en el teléfono.",
