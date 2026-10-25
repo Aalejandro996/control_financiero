@@ -8,6 +8,22 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · página de presentación y Gigadevs] — 25 oct 2026
+
+### Agregado
+- **Web — Página de presentación en `/`** (`static/landing.html`): qué es Quincena, cómo funciona, funciones, para quién es,
+  países, privacidad, descarga y preguntas frecuentes. HTML estático para que Google la lea completa, con datos
+  estructurados (SoftwareApplication, Organization de Gigadevs y FAQPage), Open Graph y enlaces a Gigadevs.
+- **Servidor:** `/` muestra la presentación a quien no tiene sesión y la app a quien sí (las PWA instaladas siguen igual);
+  la app también vive en `/app`. Nuevas rutas `/robots.txt` y `/sitemap.xml`. Pruebas: `tests/landing_test.py`.
+- **Web:** `/app#registro` abre directamente el formulario de crear cuenta.
+
+### Cambiado
+- La PWA abre `/app` (`start_url` y acceso directo), el service worker guarda `/app` para usar sin conexión y las
+  notificaciones abren `/app`. Los correos de verificación y recuperación enlazan a `/app#…`; los enlaces viejos
+  (`/#reset=…`, `/#verify=…`, `/?nuevo=gasto`) se reenvían solos a la app.
+- La app (`index.html`) lleva `noindex`: en Google aparece la presentación, no la pantalla de acceso.
+
 ## [Sin publicar · ícono nuevo y acceso renovado] — 25 oct 2026
 
 ### Agregado

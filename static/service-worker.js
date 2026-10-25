@@ -1,5 +1,5 @@
-const CACHE_NAME = 'quincena-shell-v20';
-const SHELL = ['/', '/static/manifest.webmanifest', '/static/icons/icon-192.png', '/static/icons/icon-512.png', '/static/icons/icon.svg'];
+const CACHE_NAME = 'quincena-shell-v21';
+const SHELL = ['/app', '/static/manifest.webmanifest', '/static/icons/icon-192.png', '/static/icons/icon-512.png', '/static/icons/icon.svg'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
@@ -12,12 +12,12 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/descargar/')) return;
   if (event.request.method !== 'GET') return;
   event.respondWith(fetch(event.request).then((response) => {
-    if (response.ok && (url.pathname === '/' || url.pathname.startsWith('/static/'))) {
+    if (response.ok && (url.pathname === '/app' || url.pathname.startsWith('/static/'))) {
       const clone = response.clone();
       caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
     }
     return response;
-  }).catch(async () => (await caches.match(event.request)) || (await caches.match('/'))));
+  }).catch(async () => (await caches.match(event.request)) || (await caches.match('/app'))));
 });
 
 
@@ -37,7 +37,7 @@ self.addEventListener('push', (event) => {
     badge: '/static/icons/icon-192.png',
     tag: String(payload.tag || 'control-financiero-pago').slice(0, 160),
     renotify: false,
-    data: { url: String(payload.url || '/') }
+    data: { url: String(payload.url || '/app') }
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });

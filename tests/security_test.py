@@ -131,7 +131,7 @@ check("registro correcto", s == 200, (s, j))
 wait_mail(1)
 vmail = next((m for m in sent if "Confirme" in m[1]), None)
 check("correo de confirmación enviado", vmail is not None)
-check("el enlace de confirmación usa # (no llega al servidor)", vmail and "/#verify=" in vmail[2] and "?verify=" not in vmail[2])
+check("el enlace de confirmación usa # (no llega al servidor)", vmail and "/app#verify=" in vmail[2] and "?verify=" not in vmail[2])
 vtoken = vmail[2].split("#verify=")[1].split()[0] if vmail else ""
 s, j, _ = u.req("POST", "/api/verify-email", {"token": vtoken})
 check("confirma el correo", s == 200)
@@ -147,7 +147,7 @@ check("misma respuesta con correo conocido y desconocido", unk == (s, j) == (200
 wait_mail(1)
 check("solo se envía correo al correo real", len(sent) == 1 and sent[0][0] == "ana@correo.com", sent)
 rmail = sent[0][2] if sent else ""
-check("el enlace de recuperación usa # y el origen configurado", "https://quincena.example/#reset=" in rmail and "?reset=" not in rmail)
+check("el enlace de recuperación usa # y el origen configurado", "https://quincena.example/app#reset=" in rmail and "?reset=" not in rmail)
 rtoken = rmail.split("#reset=")[1].split()[0] if rmail else ""
 for _ in range(2):
     f.req("POST", "/api/forgot-password", {"email": "ana@correo.com"}, ip=new_ip())

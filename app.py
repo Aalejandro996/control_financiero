@@ -1001,7 +1001,38 @@ def add_security_headers(response):
 @limiter.exempt
 @app.get("/")
 def index():
-    return send_from_directory(app.static_folder, "index.html")
+    """Sin sesión: la página de presentación (la que ven Google y los visitantes). Con sesión: la app, como siempre,
+    para que las PWA instaladas y los enlaces viejos sigan abriendo directo."""
+    page = "index.html" if current_user() is not None else "landing.html"
+    response = send_from_directory(app.static_folder, page)
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    return response
+
+
+@limiter.exempt
+@app.get("/app")
+def web_app():
+    response = send_from_directory(app.static_folder, "index.html")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@limiter.exempt
+@app.get("/robots.txt")
+def robots():
+    origin = public_origin() or request.url_root.rstrip("/")
+    body = f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /app\nDisallow: /descargar/\n\nSitemap: {origin}/sitemap.xml\n"
+    return app.response_class(body, mimetype="text/plain")
+
+
+@limiter.exempt
+@app.get("/sitemap.xml")
+def sitemap():
+    origin = public_origin() or request.url_root.rstrip("/")
+    pages = [("/", "1.0", "weekly"), ("/terminos", "0.3", "yearly"), ("/privacidad", "0.3", "yearly"), ("/cookies", "0.2", "yearly")]
+    urls = "".join(f"<url><loc>{origin}{path}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>" for path, prio, freq in pages)
+    return app.response_class(f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>', mimetype="application/xml")
 
 
 @limiter.exempt
@@ -1553,7 +1584,7 @@ def send_verification(user: "User") -> bool:
     if not origin or not mail_configured():
         return False
     # El código va tras "#": el navegador nunca lo envía al servidor, así no queda en registros ni en cabeceras Referer.
-    text_body, html_body = reset_email(user.username, f"{origin}/#verify={token}", "24 horas",
+    text_body, html_body = reset_email(user.username, f"{origin}/app#verify={token}", "24 horas",
                                        "Gracias por crear su cuenta en Quincena. Para activar la recuperación de su contraseña, necesitamos confirmar su correo electrónico.",
                                        "Confirmar correo", "Si usted no creó esta cuenta, puede ignorar este mensaje.")
     send_mail_async(user.email, "Confirme su correo electrónico – Quincena", text_body, html_body)
@@ -1638,7 +1669,7 @@ def forgot_password():
         db.session.commit()
         origin = public_origin()
         if origin and mail_configured():
-            text_body, html_body = reset_email(user.username, f"{origin}/#reset={token}")
+            text_body, html_body = reset_email(user.username, f"{origin}/app#reset={token}")
             send_mail_async(email, "Restablecimiento de contraseña – Quincena", text_body, html_body)
             audit("password_reset_requested", "Enlace solicitado", user.id)
         else:

@@ -3,7 +3,7 @@
   "name": "Quincena",
   "short_name": "Quincena",
   "description": "Tu dinero de cada quincena, claro y en orden.",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "background_color": "#F3F6F2",
@@ -39,7 +39,7 @@
     {
       "name": "Registrar gasto",
       "short_name": "Gasto",
-      "url": "/?nuevo=gasto",
+      "url": "/app?nuevo=gasto",
       "icons": [
         {
           "src": "/static/icons/icon-192.png",

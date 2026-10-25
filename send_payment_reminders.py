@@ -88,7 +88,7 @@ def main() -> int:
                     try:
                         webpush(
                             subscription_info=sub.subscription_json,
-                            data=json.dumps({"title": title, "body": body, "url": "/", "tag": f"{payment_key}-{due_date}-{days}"}),
+                            data=json.dumps({"title": title, "body": body, "url": "/app", "tag": f"{payment_key}-{due_date}-{days}"}),
                             vapid_private_key=private_key,
                             vapid_claims={"sub": claims_sub},
                             ttl=86400,
