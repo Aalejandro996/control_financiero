@@ -8,6 +8,13 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · vista previa en redes] — 25 oct 2026
+
+### Agregado
+- **Web — Vista previa al compartir:** etiquetas Open Graph (título, descripción e imagen) para que el enlace se vea
+  con tarjeta en Facebook, Instagram y WhatsApp. La imagen es `static/og-image.png` (1200×630) y se regenera desde
+  `tools/og-image.html`. Las etiquetas usan la dirección de Render: si cambia el dominio, hay que actualizarlas.
+
 ## [Sin publicar · países y cobro semanal] — 25 oct 2026
 
 ### Agregado
