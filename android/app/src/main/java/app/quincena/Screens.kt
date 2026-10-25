@@ -561,7 +561,7 @@ fun Mas(st: AppState) {
             ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
         }.onSuccess { st.toast("Listo: tus datos se guardaron.") }.onFailure { st.toast("No pudimos guardar el archivo.") }
     }
-    fun turnOnAvisos() { Reminders.enable(ctx); repo.setPref("avisos", "1"); avisosOn = true; st.toast("Listo: te avisaremos antes de cada pago.") }
+    fun turnOnAvisos() { Reminders.enable(ctx); repo.setPref("avisos", "1"); avisosOn = true; st.toast("Listo: te avisaremos de pagos, cobros, presupuesto y versiones nuevas.") }
     val askNotif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) turnOnAvisos() else st.toast("Activa las notificaciones en los ajustes del teléfono.")
     }
@@ -592,7 +592,16 @@ fun Mas(st: AppState) {
                 askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
             else turnOnAvisos()
         }, outline = true)
-        Mut("Te avisamos 7, 4 y 1 día antes de cada pago programado o compromiso, y el mismo día.")
+        Mut("Revisamos en tu teléfono cada pocas horas, nunca de noche. Elige qué quieres que te avise:")
+        if (avisosOn) AVISO_TIPOS.forEach { (k, label) ->
+            var on by remember { mutableStateOf(repo.pref("av_$k") != "0") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(label, Modifier.weight(1f), fontSize = 15.sp)
+                androidx.compose.material3.Switch(on, { on = it; repo.setPref("av_$k", if (it) null else "0") },
+                    colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = pal.g))
+            }
+        }
+        Mut("Pagos: 7, 4 y 1 día antes y el mismo día. Me deben: el día del cobro y si pasan 3 días sin pagar. Presupuesto: al llegar al 80 % de una categoría en la quincena. Versión nueva: una vez por versión.")
     }
     SeguridadCard(st)
     QCard {

@@ -1,1 +1,1 @@
-Nuevo: Mis cuentas (banco, efectivo, Zelle, Binance), calendario de pagos, "Me deben", ingresos recibidos y más seguridad.
+Nuevo: avisos de cobros "Me deben", de presupuesto y de versiones nuevas. Los eliges en Más.

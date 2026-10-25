@@ -70,6 +70,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         repo = Repo(applicationContext)
         lock.locked = lockOn
+        if (repo.loggedIn && repo.pref("avisos") == "1") Reminders.ensure(applicationContext)
         prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { prompting = false; lock.locked = false }
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { prompting = false }

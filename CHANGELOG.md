@@ -8,7 +8,7 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
-## [1.6.0] — 25 oct 2026 · versionCode 8 (o el automático de GitHub)
+## [1.6.0] — 25 oct 2026 · app 1.9 (versionCode 105, compilada por GitHub)
 
 ### Agregado
 - **Web y Android — Mis cuentas:** banco, efectivo, digital (Zelle…) y cripto (USDT). Cada gasto, ingreso o préstamo
@@ -49,6 +49,16 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 ---
 
 ## [Sin publicar]
+
+### Agregado
+- **Android — Avisos ampliados** (sin Firebase ni claves: los calcula el teléfono): además de los pagos y compromisos,
+  ahora avisa de **cobros de "Me deben"** (el día del cobro, el día anterior y a los 3 días de atraso),
+  **presupuesto al 80 % y al 100 %** de cada categoría en la quincena y **nueva versión de la app**.
+  En Más › Seguridad y avisos se prende o apaga cada tipo por separado.
+- **Android:** la revisión pasa de una vez al día a **cada 6 horas**, y nunca avisa entre las 10 pm y las 7 am
+  (lo pendiente sale en la primera revisión de la mañana). Quien ya tenía los avisos activos pasa al ritmo nuevo al abrir la app.
+- **GitHub Actions:** paso opcional que **redespliega Render** al publicar el APK (secreto `RENDER_DEPLOY_HOOK`).
+  Sin ese secreto no hace nada y avisa cómo lanzarlo a mano.
 
 ### Cambiado
 - **Aviso de actualización:** el texto sale de `android/NOVEDADES.txt` (lenguaje sencillo).
