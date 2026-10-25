@@ -1005,6 +1005,15 @@ def index():
 
 
 @limiter.exempt
+@app.get("/favicon.ico")
+def favicon():
+    # Los navegadores lo piden siempre en la raíz, aunque la página declare otro icono.
+    response = send_from_directory(Path(app.static_folder) / "icons", "favicon.ico", mimetype="image/x-icon")
+    response.headers["Cache-Control"] = "public, max-age=604800"
+    return response
+
+
+@limiter.exempt
 @app.get("/service-worker.js")
 def service_worker():
     response = send_from_directory(app.static_folder, "service-worker.js")

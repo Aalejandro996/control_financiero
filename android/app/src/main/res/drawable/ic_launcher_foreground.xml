@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono de la app: la "Q" de Quincena (anillo blanco y cola menta), el mismo diseño de tools/icons.py.
+     Lienzo de 108dp; la figura cabe en el círculo seguro de 66dp para que ningún launcher la recorte. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="8.12" android:fillColor="#00000000"
+        android:pathData="M33.98,51.2 a17.08,17.08 0 1,0 34.16,0 a17.08,17.08 0 1,0 -34.16,0" />
+    <path android:strokeColor="#FFBFF0D8" android:strokeWidth="8.12" android:fillColor="#00000000"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M53.3,64.36 L62.82,73.88 L74.02,73.88" />
+</vector>

@@ -8,6 +8,28 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · ícono nuevo y acceso renovado] — 25 oct 2026
+
+### Agregado
+- **Ícono nuevo (web y Android):** la "Q" de Quincena en blanco con la cola menta, sobre el degradado verde de la marca.
+  Sale de un solo diseño: `python3 tools/icons.py` genera `favicon.ico` (16/32/48), `icon.svg`, los PNG de la PWA,
+  un ícono *maskable* propio, el de iPhone (`apple-touch-icon.png`) y los PNG de respaldo de Android.
+- **Android:** ícono adaptativo vectorial (`drawable/ic_launcher_foreground.xml` y `ic_launcher_background.xml`) con capa
+  monocromática para los íconos temáticos de Android 13+. Se quitaron los PNG de primer plano viejos.
+- **Servidor:** ruta `/favicon.ico` (los navegadores la piden siempre en la raíz).
+
+### Cambiado
+- **Web — Pantallas de acceso:** en computadora, panel de marca a la izquierda y formulario a la derecha; en el teléfono,
+  formulario centrado con el ícono. Botón para mostrar u ocultar la contraseña, aviso de Bloq Mayús, "¿Olvidaste tu
+  contraseña?" junto al campo, separador antes de "Entrar con huella o rostro" y menos botones apilados.
+- El aviso de descargar la app usa el ícono nuevo (antes iba incrustado en base64).
+
+### Corregido
+- **Web:** al equivocarse de contraseña salía "Tu sesión terminó. Entra de nuevo."; ahora se muestra el mensaje real
+  ("Usuario o contraseña incorrectos.").
+- **Web:** en modo oscuro, el botón principal de las pantallas de acceso tenía texto blanco sobre verde claro (poco
+  contraste); ahora el texto es oscuro.
+
 ## [Sin publicar · origen de los registros] — 25 oct 2026
 
 ### Agregado

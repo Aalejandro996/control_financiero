@@ -3,6 +3,7 @@ android/build/
 android/app/build/
 android/local.properties
 android/.idea/
+android/.kotlin/
 *.jks
 
 # Secretos y datos locales: nunca al repositorio
