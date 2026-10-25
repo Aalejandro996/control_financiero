@@ -74,16 +74,16 @@ val pal: Pal @Composable get() = LocalPal.current
 // ---------- Textos ----------
 
 @Composable fun Title(text: String, size: TextUnit = 22.sp, color: Color = pal.g) =
-    Text(text, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = size, lineHeight = size * 1.15f, color = color)
+    Text(loc(text), fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = size, lineHeight = size * 1.15f, color = color)
 
 @Composable fun Big(text: String, size: TextUnit = 48.sp, color: Color = Color.Unspecified) =
-    Text(text, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = size, lineHeight = size * 1.1f, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(loc(text), fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = size, lineHeight = size * 1.1f, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
 @Composable fun Mut(text: String, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) =
-    Text(text, modifier, color = pal.mut, fontSize = 14.sp, lineHeight = 19.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+    Text(loc(text), modifier, color = pal.mut, fontSize = 14.sp, lineHeight = 19.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 
 @Composable fun B(text: String, modifier: Modifier = Modifier, color: Color = Color.Unspecified) =
-    Text(text, modifier, fontWeight = FontWeight.Bold, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Text(loc(text), modifier, fontWeight = FontWeight.Bold, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
 
 @Composable fun Amt(text: String) = Text(text, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
 
@@ -115,7 +115,7 @@ fun Btn(
             .padding(horizontal = if (small) 14.dp else 22.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = (if (outline) color else Color.White).copy(alpha = if (enabled) 1f else .6f),
+        Text(loc(text), color = (if (outline) color else Color.White).copy(alpha = if (enabled) 1f else .6f),
             fontWeight = FontWeight.SemiBold, fontSize = if (small) 14.sp else 16.sp, maxLines = 1)
     }
 }
@@ -123,7 +123,7 @@ fun Btn(
 @Composable
 fun Link(text: String, onClick: () -> Unit, color: Color = pal.g) {
     Box(Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = color, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(loc(text), color = color, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -134,7 +134,7 @@ fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
         Modifier.heightIn(min = 40.dp).clip(CircleShape).background(if (on) p.gs else p.card)
             .border(1.dp, if (on) p.g else p.line, CircleShape).clickable(onClick = onClick).padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(text, fontWeight = FontWeight.SemiBold, color = if (on) p.g else p.ink, maxLines = 1) }
+    ) { Text(loc(text), fontWeight = FontWeight.SemiBold, color = if (on) p.g else p.ink, maxLines = 1) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -185,7 +185,7 @@ fun Seg(options: List<Pair<String, String>>, value: String, onChange: (String) -
 // ---------- Campos de formulario ----------
 
 @Composable
-private fun FieldLabel(text: String) = Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+private fun FieldLabel(text: String) = Text(loc(text), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
 fun fieldColors() = OutlinedTextFieldDefaults.colors(
@@ -202,7 +202,7 @@ fun Field(
         FieldLabel(label)
         OutlinedTextField(
             value, onChange, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(12.dp), colors = fieldColors(),
-            placeholder = { if (placeholder.isNotEmpty()) Text(placeholder, color = LocalPal.current.mut) },
+            placeholder = { if (placeholder.isNotEmpty()) Text(loc(placeholder), color = LocalPal.current.mut) },
             keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else kind),
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         )
@@ -226,11 +226,11 @@ fun Select(label: String, options: List<Pair<String, String>>, value: String, on
                     .border(1.dp, p.line, RoundedCornerShape(12.dp)).clickable { expanded = true }.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(options.firstOrNull { it.first == value }?.second ?: "Elegir…", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(loc(options.firstOrNull { it.first == value }?.second ?: "Elegir…"), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("▾", color = p.mut)
             }
             DropdownMenu(expanded, { expanded = false }) {
-                options.forEach { (v, l) -> DropdownMenuItem(text = { Text(l) }, onClick = { onChange(v); expanded = false }) }
+                options.forEach { (v, l) -> DropdownMenuItem(text = { Text(loc(l)) }, onClick = { onChange(v); expanded = false }) }
             }
         }
     }

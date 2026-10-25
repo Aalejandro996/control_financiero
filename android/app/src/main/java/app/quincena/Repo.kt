@@ -24,8 +24,11 @@ class Repo(ctx: Context) {
         store.get(name)?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
 
     /** Datos actuales. Es estado de Compose: las pantallas se redibujan solas al cambiar. */
-    var data: JsonObject by mutableStateOf(load("data") ?: JsonObject(emptyMap()))
-        private set
+    private var dataState by mutableStateOf(load("data") ?: JsonObject(emptyMap()))
+    var data: JsonObject
+        get() = dataState
+        private set(v) { dataState = v; Loc.set(v.str("country")) }
+    init { Loc.set(dataState.str("country")) }
     private var base: JsonObject = load("base") ?: data
     private var rev: Int = store.get("rev")?.toIntOrNull() ?: 0
 
@@ -62,9 +65,9 @@ class Repo(ctx: Context) {
     }
 
     /** Crea la cuenta (si el servidor tiene el registro abierto) y entra. */
-    suspend fun register(user: String, email: String, pass: String) {
+    suspend fun register(user: String, email: String, pass: String, country: String = "VE") {
         api.call("POST", "/api/register", buildJsonObject {
-            put("username", user.trim().lowercase()); put("email", email.trim()); put("password", pass); put("accept_terms", true)
+            put("username", user.trim().lowercase()); put("email", email.trim()); put("password", pass); put("accept_terms", true); put("country", country)
         })
         login(user, pass)
         // Al crear la cuenta ya aceptó los términos vigentes.
@@ -148,9 +151,9 @@ class Repo(ctx: Context) {
         return sync.withLock { guard { push() } }
     }
 
-    /** Actualiza el dólar BCV. Devuelve el texto para mostrar junto a la tasa. */
+    /** Actualiza el tipo de cambio del país (BCV en Venezuela). Devuelve el texto para mostrar junto a la tasa. */
     suspend fun updateRate(): String = try {
-        val r = api.call("GET", "/api/rate")
+        val r = api.call("GET", "/api/rate?country=" + Loc.code)
         val rate = r["rate"]!!.jsonPrimitive.double
         val market = (r["parallel"] as? JsonPrimitive)?.doubleOrNull
         val today = java.time.LocalDate.now().toString()

@@ -113,7 +113,7 @@ fun lastCambio(d: JsonObject): Double {
     return t.num("amountTo") / t.num("amountFrom")
 }
 
-fun accLabel(a: JsonObject) = "${a.str("name") ?: "Cuenta"} (${if (a.str("currency") == "BS") "Bs." else "$"})"
+fun accLabel(a: JsonObject) = "${a.str("name") ?: "Cuenta"} (${if (a.str("currency") == "BS") Loc.cur.sym else "$"})"
 fun accName(d: JsonObject, id: String?) = accById(d, id)?.let { " · " + (it.str("name") ?: "") } ?: ""
 
 // ---------- Ingresos recibidos ----------
@@ -160,6 +160,7 @@ fun calEvents(d: JsonObject, ym: YearMonth, f: Fmt): Map<Int, List<CalEv>> {
     for (s in d.arr("incomeSources")) {
         val days = (s["payDays"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.intOrNull } ?: emptyList()
         val list = when (s.str("frequency")) {
+            "semanal" -> (1..last).filter { ym.atDay(it).dayOfWeek.value == (days.firstOrNull() ?: 5) }
             "quincenal" -> if (days.size == 2) days else listOf(15, 30)
             "mensual" -> listOf(days.firstOrNull() ?: 1)
             else -> emptyList()
@@ -212,7 +213,7 @@ fun CuentasView(st: AppState) {
     ) {
         Text("Tienes en total", color = Color.White)
         Big("≈ " + f.show(totalUsd(d)), size = 38.sp, color = Color.White)
-        Text("${accs.size} ${if (accs.size == 1) "cuenta" else "cuentas"} · los bolívares se convierten a tasa BCV", fontSize = 13.sp, color = Color.White.copy(alpha = .85f))
+        Text(loc("${accs.size} ${if (accs.size == 1) "cuenta" else "cuentas"} · los bolívares se convierten a tasa BCV"), fontSize = 13.sp, color = Color.White.copy(alpha = .85f))
     }
     QCard {
         Items(accs, "Agrega tus cuentas (banco, efectivo, Zelle, Binance…) para saber cuánto tienes y dónde. Cada gasto o ingreso puede salir o entrar de una cuenta.") { a ->
@@ -253,7 +254,7 @@ fun IngresosView(st: AppState) {
     val d = st.repo.data
     val f = st.fmt
     val p = pal
-    val freq = mapOf("quincenal" to "Cada quincena", "mensual" to "Una vez al mes", "ocasional" to "Solo una vez")
+    val freq = mapOf("semanal" to "Cada semana", "quincenal" to "Cada quincena", "mensual" to "Una vez al mes", "ocasional" to "Solo una vez")
     QCard {
         B("Tus ingresos fijos")
         Items(d.arr("incomeSources"), "Agrega tu sueldo u otros ingresos para ver cuánto te queda.") { s ->

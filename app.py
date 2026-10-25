@@ -80,7 +80,26 @@ db = SQLAlchemy(app)
 limiter = Limiter(get_remote_address, app=app, default_limits=[os.getenv("API_DEFAULT_LIMIT", "240 per minute")],
                   storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"))
 
+# Países soportados. "BS" sigue siendo el código interno de la moneda local (así los datos ya guardados no cambian):
+# para cada persona significa "mi moneda local", y el país dice cuál es.
+COUNTRIES = {
+    "VE": {"name": "Venezuela", "cur": "VES", "sym": "Bs.", "plural": "bolívares", "dec": 2, "official": "BCV", "market": "USDT", "rate": 40.0},
+    "CO": {"name": "Colombia", "cur": "COP", "sym": "COP $", "plural": "pesos colombianos", "dec": 0, "official": "TRM", "market": "", "rate": 4000.0},
+    "CL": {"name": "Chile", "cur": "CLP", "sym": "CLP $", "plural": "pesos chilenos", "dec": 0, "official": "oficial", "market": "", "rate": 950.0},
+    "PE": {"name": "Perú", "cur": "PEN", "sym": "S/", "plural": "soles", "dec": 2, "official": "oficial", "market": "", "rate": 3.7},
+    "MX": {"name": "México", "cur": "MXN", "sym": "MX$", "plural": "pesos mexicanos", "dec": 2, "official": "oficial", "market": "", "rate": 18.0},
+    "AR": {"name": "Argentina", "cur": "ARS", "sym": "AR$", "plural": "pesos argentinos", "dec": 2, "official": "oficial", "market": "", "rate": 1400.0},
+}
+DEFAULT_COUNTRY = "VE"
+
+
+def clean_country(value) -> str:
+    code = str(value or "").strip().upper()
+    return code if code in COUNTRIES else DEFAULT_COUNTRY
+
+
 DEFAULT_SHARED_DATA = {
+    "country": DEFAULT_COUNTRY,  # país de la persona: define la moneda local, su tasa y cómo se muestran los montos
     "currency": "USD",
     "exchangeRate": 40.0,
     "marketRate": 0.0,  # dólar del mercado (USDT/paralelo) en Bs.; 0 = desconocido
@@ -491,12 +510,14 @@ def normalize_shared_data(value) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Los datos deben tener formato de objeto JSON.")
     result = copy.deepcopy(DEFAULT_SHARED_DATA)
+    result["country"] = clean_country(value.get("country"))
+    default_rate = COUNTRIES[result["country"]]["rate"]
     result["currency"] = "BS" if value.get("currency") in ("BS", "VES") else "USD"
     try:
-        rate = float(value.get("exchangeRate", DEFAULT_SHARED_DATA["exchangeRate"]))
+        rate = float(value.get("exchangeRate", default_rate))
     except (TypeError, ValueError):
-        rate = DEFAULT_SHARED_DATA["exchangeRate"]
-    result["exchangeRate"] = rate if math.isfinite(rate) and 0 < rate < 1_000_000 else DEFAULT_SHARED_DATA["exchangeRate"]
+        rate = default_rate
+    result["exchangeRate"] = rate if math.isfinite(rate) and 0 < rate < 1_000_000 else default_rate
     result["marketRate"] = _rate_or_none(value.get("marketRate")) or 0.0
     try:
         savings = float(value.get("bsSavings") or 0)
@@ -661,7 +682,7 @@ def normalize_shared_data(value) -> dict:
         if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000_000:
             continue
         kind = row.get("kind") if row.get("kind") in {"sueldo", "bono", "cestatickets", "otro"} else "otro"
-        frequency = row.get("frequency") if row.get("frequency") in {"quincenal", "mensual", "ocasional"} else "quincenal"
+        frequency = row.get("frequency") if row.get("frequency") in {"semanal", "quincenal", "mensual", "ocasional"} else "quincenal"
         raw_days = row.get("payDays", [])
         if not isinstance(raw_days, list):
             raw_days = []
@@ -674,7 +695,9 @@ def normalize_shared_data(value) -> dict:
             if 1 <= n <= 31 and n not in days:
                 days.append(n)
         days.sort()
-        if frequency == "quincenal" and len(days) != 2:
+        if frequency == "semanal":  # payDays = [día de la semana que cobra]: 1 = lunes … 7 = domingo
+            days = [days[0]] if days and 1 <= days[0] <= 7 else [5]
+        elif frequency == "quincenal" and len(days) != 2:
             days = [15, 30]
         elif frequency == "mensual" and len(days) < 1:
             days = [30]
@@ -931,7 +954,7 @@ def three_way_merge(base_data, incoming_data, current_data):
             else:
                 merged[key] = incoming[key]
     # Tasas e historial: gana el último que escribe (no es un conflicto real).
-    for key in ("exchangeRate", "marketRate", "rateHistory", "termsVersion"):
+    for key in ("country", "exchangeRate", "marketRate", "rateHistory", "termsVersion"):
         if incoming[key] != base[key]:
             merged[key] = incoming[key]
     for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring",
@@ -1489,8 +1512,11 @@ def register():
     user = User(username=username, email=email, password_hash=generate_password_hash(password), role="member", must_change_password=False)
     db.session.add(user)
     db.session.commit()
-    ensure_user_state(user.id)
-    audit("account_registered", "Cuenta creada; aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
+    record = ensure_user_state(user.id)
+    country = clean_country(body.get("country"))
+    record.data = {**copy.deepcopy(DEFAULT_SHARED_DATA), "country": country, "exchangeRate": COUNTRIES[country]["rate"]}
+    db.session.commit()
+    audit("account_registered", f"Cuenta creada ({country}); aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
     send_verification(user)
     return start_session(user)
 
@@ -1818,38 +1844,64 @@ def audit_log():
     users = {u.id: u.username for u in User.query.filter(User.id.in_([e.user_id for e in events if e.user_id is not None])).all()}
     return jsonify(events=[{"action": e.action, "detail": e.detail, "username": users.get(e.user_id, "Sistema"), "created_at": e.created_at.isoformat() if e.created_at else None} for e in events])
 
-_RATE_CACHE = {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None}
+_RATE_CACHE = {}  # por país: {"rate", "updated", "fetched", "parallel", "parallel_updated"}
+
+
+def _http_json(url: str):
+    request_obj = urllib.request.Request(url, headers={"User-Agent": "Quincena/1.0"})
+    with urllib.request.urlopen(request_obj, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_rate(country: str = DEFAULT_COUNTRY) -> dict:
+    """Tasa oficial de la moneda local por 1 USD, con caché de 30 minutos y último valor conocido.
+
+    Venezuela (oficial y paralelo) y Argentina (oficial) usan dolarapi; los demás países, tipos de cambio diarios de open.er-api.com."""
+    country = clean_country(country)
+    cache = _RATE_CACHE.setdefault(country, {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None})
+    now = time.time()
+    if cache["rate"] and now - cache["fetched"] < 1800:
+        return cache
+    cache["fetched"] = now - 1500 if cache["rate"] else 0.0  # ante un fallo, se reintenta en ~5 minutos
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        if country in ("VE", "AR"):
+            rows = _http_json(f"https://{country.lower()}.dolarapi.com/v1/dolares")
+            row = next((item for item in rows if item.get("fuente") == "oficial"), rows[0])
+            value = float(row.get("promedio") if row.get("promedio") is not None else row.get("venta"))
+            if math.isfinite(value) and 0 < value < 1_000_000:
+                cache.update(rate=value, updated=row.get("fechaActualizacion") or stamp, fetched=now)
+            market = next((item for item in rows if item.get("fuente") == "paralelo"), None) if country == "VE" else None
+            market_value = _rate_or_none(market.get("promedio") if market and market.get("promedio") is not None else (market or {}).get("venta"))
+            if market_value:
+                cache.update(parallel=market_value, parallel_updated=market.get("fechaActualizacion") or stamp)
+        else:
+            data = _http_json("https://open.er-api.com/v6/latest/USD")
+            value = float((data.get("rates") or {}).get(COUNTRIES[country]["cur"]))
+            if math.isfinite(value) and 0 < value < 1_000_000:
+                cache.update(rate=value, updated=stamp, fetched=now)
+    except Exception:
+        pass  # se conserva el último valor conocido
+    return cache
 
 
 def fetch_bcv_rate() -> dict:
-    """Dólar BCV consultado desde el servidor, con caché de 30 minutos y último valor conocido."""
-    now = time.time()
-    if _RATE_CACHE["rate"] and now - _RATE_CACHE["fetched"] < 1800:
-        return _RATE_CACHE
-    try:
-        request_obj = urllib.request.Request("https://ve.dolarapi.com/v1/dolares", headers={"User-Agent": "Quincena/1.0"})
-        with urllib.request.urlopen(request_obj, timeout=5) as response:
-            rows = json.loads(response.read().decode("utf-8"))
-        row = next((item for item in rows if item.get("fuente") == "oficial"), rows[0])
-        value = float(row.get("promedio"))
-        if math.isfinite(value) and 0 < value < 1_000_000:
-            _RATE_CACHE.update(rate=value, updated=row.get("fechaActualizacion") or datetime.now(timezone.utc).isoformat(), fetched=now)
-        market = next((item for item in rows if item.get("fuente") == "paralelo"), None)
-        market_value = _rate_or_none(market.get("promedio")) if market else None
-        if market_value:
-            _RATE_CACHE.update(parallel=market_value, parallel_updated=market.get("fechaActualizacion") or datetime.now(timezone.utc).isoformat())
-    except Exception:
-        pass  # se conserva el último valor conocido
-    return _RATE_CACHE
+    return fetch_rate("VE")
+
+
+@app.get("/api/countries")
+def list_countries():
+    return jsonify(countries=COUNTRIES, default=DEFAULT_COUNTRY)
 
 
 @app.get("/api/rate")
 @require_auth()
 def get_rate():
-    cached = fetch_bcv_rate()
+    country = clean_country(request.args.get("country"))
+    cached = fetch_rate(country)
     if not cached["rate"]:
-        return jsonify(error="No pudimos obtener el dólar BCV ahora. Inténtalo en unos minutos."), 503
-    return jsonify(rate=cached["rate"], updated_at=cached["updated"], parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
+        return jsonify(error=f"No pudimos obtener el tipo de cambio ({COUNTRIES[country]['official']}) ahora. Inténtalo en unos minutos."), 503
+    return jsonify(country=country, rate=cached["rate"], updated_at=cached["updated"], parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
 
 
 @app.delete("/api/account")

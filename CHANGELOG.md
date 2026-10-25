@@ -8,6 +8,25 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · países y cobro semanal] — 25 oct 2026
+
+### Agregado
+- **Web y Android — País y moneda:** al crear la cuenta se elige el país (Venezuela, Colombia, Chile, Perú, México o
+  Argentina; se sugiere uno según la zona horaria). La app usa la moneda local de ese país (Bs., pesos, soles) y su tipo
+  de cambio oficial, que se actualiza solo. Se puede cambiar en Más › País y moneda.
+- **Web y Android — Ingreso semanal:** nueva frecuencia "Cada semana" con el día en que cobras. El ingreso de cada
+  quincena cuenta los cobros que realmente caen en esas fechas y el calendario marca cada uno.
+- **Servidor:** `/api/countries` y `/api/rate?country=XX` (Venezuela y Argentina por dolarapi, el resto por
+  open.er-api.com). Pruebas nuevas: `tests/country_test.py` y `tests/country_ui_test.py`.
+
+### Cambiado
+- Los textos de Venezuela (Bs., bolívares, BCV) se adaptan al país elegido; en pesos colombianos y chilenos los montos
+  salen sin decimales. Las cuentas existentes siguen en Venezuela y no cambia nada para ellas.
+- Las funciones de tasa paralela (USDT) y la brecha solo aparecen en Venezuela.
+
+### Pendiente
+- Los términos y la privacidad siguen citando las leyes de Venezuela: conviene una revisión legal antes de abrir otros países.
+
 ## [Sin publicar · seguridad del servidor] — 25 oct 2026
 
 Solo servidor y web. **No hay cambios en la app Android** (no hace falta compilar otro APK).

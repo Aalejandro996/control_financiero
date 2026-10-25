@@ -1,1 +1,1 @@
-Nuevo: avisos de cobros "Me deben", de presupuesto y de versiones nuevas. Los eliges en Más.
+Nuevo: elige tu país (Colombia, Chile, Perú, México, Argentina o Venezuela) y la app usa tu moneda y tu tipo de cambio. También ingresos semanales.

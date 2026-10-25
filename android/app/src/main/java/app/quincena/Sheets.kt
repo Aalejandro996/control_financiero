@@ -47,6 +47,7 @@ fun SheetHost(st: AppState) {
                     "cpago" -> CPagoForm(st, s.arg!!)
                     "cuotas" -> CuotasForm(st)
                     "bolsa" -> BolsaForm(st)
+                    "pais" -> PaisForm(st)
                     "caja" -> CajaSheet(st)
                     "info:tasas", "info:poder", "info:camino", "info:pres" -> InfoSheet(st, s.kind.removePrefix("info:"))
                     "cobro" -> CobroForm(st, s.arg!!)
@@ -148,18 +149,21 @@ fun IngresoForm(st: AppState, id: String?) {
     var amount by remember { mutableStateOf(inputMoney(s?.num("amount"))) }
     var cur by remember { mutableStateOf(s?.str("currency") ?: "USD") }
     var freq by remember { mutableStateOf(s?.str("frequency") ?: "quincenal") }
-    var day by remember { mutableStateOf(prevDays.firstOrNull()?.toString() ?: "") }
+    var day by remember { mutableStateOf(if (s?.str("frequency") == "mensual") prevDays.firstOrNull()?.toString() ?: "" else "") }
+    var wday by remember { mutableStateOf(if (s?.str("frequency") == "semanal") (prevDays.firstOrNull() ?: 5).toString() else "5") }
     SheetTitle(if (s == null) "Nuevo ingreso" else "Editar ingreso")
     Field("Nombre", name, { name = it }, placeholder = "Sueldo")
     MoneyField("Monto", amount) { amount = it }
     CurrencySelect(cur) { cur = it }
-    Select("Frecuencia", listOf("quincenal" to "Cada quincena", "mensual" to "Una vez al mes", "ocasional" to "Solo una vez"), freq) { freq = it }
+    Select("Frecuencia", listOf("semanal" to "Cada semana", "quincenal" to "Cada quincena", "mensual" to "Una vez al mes", "ocasional" to "Solo una vez"), freq) { freq = it }
+    if (freq == "semanal") Select("Día en que cobras", WEEKDAYS, wday) { wday = it }
     if (freq == "mensual") Field("Día del mes en que cobras", day, { day = it.filter(Char::isDigit).take(2) }, placeholder = "1", kind = KeyboardType.Number)
     if (s != null) OutlineDanger("Eliminar este ingreso") { st.close(); st.act("Ingreso eliminado", undo = true) { it.removeRow("incomeSources", s.id) } }
     Footer(st, {
         if (name.isBlank()) return@Footer st.toast("Escribe un nombre, por ejemplo Sueldo.")
         val a = pos(amount) ?: return@Footer st.badAmount()
         val days = when (freq) {
+            "semanal" -> listOf((wday.toIntOrNull() ?: 5).coerceIn(1, 7))
             "mensual" -> listOf((day.toIntOrNull() ?: prevDays.firstOrNull() ?: 1).coerceIn(1, 31))
             "quincenal" -> if (s?.str("frequency") == "quincenal" && prevDays.size == 2) prevDays else listOf(15, 30)
             else -> prevDays.ifEmpty { listOf(1) }

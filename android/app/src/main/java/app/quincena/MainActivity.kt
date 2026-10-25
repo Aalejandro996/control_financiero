@@ -293,7 +293,7 @@ fun Head(st: AppState) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Link(if (st.hide) "Mostrar" else "Ocultar", st::toggleHide)
-            Seg(listOf("USD" to "$", "BS" to "Bs."), if (st.repo.data.str("currency") == "BS") "BS" else "USD", st::setCurrency)
+            Seg(listOf("USD" to "$", "BS" to Loc.cur.short), if (st.repo.data.str("currency") == "BS") "BS" else "USD", st::setCurrency)
         }
     }
 }

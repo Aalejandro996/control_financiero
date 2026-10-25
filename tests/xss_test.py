@@ -37,6 +37,7 @@ try:
         b = pw.chromium.launch()
         ctx = b.new_context(base_url=f"http://127.0.0.1:{PORT}")
         page = ctx.new_page()
+        page.add_init_script("try{sessionStorage.setItem('qapk_s','1');localStorage.setItem('qapk','1')}catch(e){}")
         dialogs = []
         page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
         page.goto("/")

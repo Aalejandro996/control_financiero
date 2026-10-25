@@ -1,5 +1,8 @@
 package app.quincena
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.time.LocalDate
@@ -28,6 +31,57 @@ val CONCEPTS = listOf(
     "transporte" to "Transporte", "comedor" to "Comedor", "actividad" to "Actividad", "otro" to "Otro",
 )
 val CURRENCIES = listOf("USD" to "Dólares ($)", "BS" to "Bolívares (Bs.)")
+
+// ---------- País y moneda local ----------
+/** "BS" es el código interno de la moneda local ("mi moneda"); el país dice cuál es (Bs., pesos, soles…). */
+class Country(val code: String, val name: String, val sym: String, val short: String, val plural: String, val dec: Int, val official: String, val rate: Double)
+
+val COUNTRIES = listOf(
+    Country("VE", "Venezuela", "Bs.", "Bs.", "bolívares", 2, "BCV", 40.0),
+    Country("CO", "Colombia", "COP $", "COP", "pesos colombianos", 0, "TRM", 4000.0),
+    Country("CL", "Chile", "CLP $", "CLP", "pesos chilenos", 0, "oficial", 950.0),
+    Country("PE", "Perú", "S/", "S/", "soles", 2, "oficial", 3.7),
+    Country("MX", "México", "MX$", "MXN", "pesos mexicanos", 2, "oficial", 18.0),
+    Country("AR", "Argentina", "AR$", "ARS", "pesos argentinos", 2, "oficial", 1400.0),
+)
+
+/** País actual: es estado de Compose, así las pantallas se redibujan solas al cambiarlo. */
+object Loc {
+    var code by mutableStateOf("VE")
+    val cur: Country get() = COUNTRIES.firstOrNull { it.code == code } ?: COUNTRIES[0]
+    fun set(c: String?) { val n = if (COUNTRIES.any { it.code == c }) c!! else "VE"; if (n != code) code = n }
+}
+
+/** Adapta los textos escritos para Venezuela (Bs., bolívares, BCV) al país de la persona. En Venezuela no cambia nada. */
+fun loc(s: String): String {
+    val c = Loc.cur
+    if (c.code == "VE") return s
+    val pl = c.plural.replaceFirstChar { it.uppercase() }
+    return s.replace("Bolívares", pl).replace("bolívares", c.plural).replace("Bs.", c.sym).replace(Regex("\\bBs\\b"), c.sym).replace(Regex("\\bBCV\\b"), c.official)
+}
+
+/** País sugerido por la zona horaria del teléfono. */
+fun guessCountry(): String {
+    val z = java.util.TimeZone.getDefault().id
+    return when {
+        z.contains("Bogota") -> "CO"
+        z.contains("Santiago") || z.contains("Punta_Arenas") -> "CL"
+        z.contains("Lima") -> "PE"
+        Regex("Mexico|Cancun|Monterrey|Merida|Tijuana|Hermosillo|Chihuahua|Mazatlan").containsMatchIn(z) -> "MX"
+        z.contains("Argentina") -> "AR"
+        else -> "VE"
+    }
+}
+
+val WEEKDAYS = listOf("1" to "Lunes", "2" to "Martes", "3" to "Miércoles", "4" to "Jueves", "5" to "Viernes", "6" to "Sábado", "7" to "Domingo")
+
+/** Cobros de un ingreso semanal que caen entre [from] y [to] (dow: 1 = lunes … 7 = domingo). */
+fun weekdayCount(dow: Int, from: LocalDate, to: LocalDate): Int {
+    var n = 0
+    var d = from
+    while (!d.isAfter(to)) { if (d.dayOfWeek.value == dow) n++; d = d.plusDays(1) }
+    return n
+}
 
 // ---------- Lectura y escritura de JSON ----------
 
@@ -75,9 +129,12 @@ fun nowIso(): String = Instant.now().toString()
 /** Formato de montos: oculta, cambia de moneda y usa coma decimal, igual que la web. */
 class Fmt(val hide: Boolean, val bs: Boolean, val rate: Double) {
     private fun n(v: Double) = String.format(ES, "%,.2f", v)
-    fun show(usd: Double) = if (hide) "••••" else if (bs) "Bs. " + n(usd * rate) else "\$ " + n(usd)
-    fun orig(a: Double, cur: String?) = if (hide) "••••" else if (cur == "BS") "Bs. " + n(a) else "\$ " + n(a)
+    private fun nl(v: Double) = String.format(ES, "%,." + Loc.cur.dec + "f", v)
+    fun show(usd: Double) = if (hide) "••••" else if (bs) Loc.cur.sym + " " + nl(usd * rate) else "\$ " + n(usd)
+    fun orig(a: Double, cur: String?) = if (hide) "••••" else if (cur == "BS") Loc.cur.sym + " " + nl(a) else "\$ " + n(a)
     fun plain(v: Double) = n(v)
+    /** Monto en moneda local (sin decimales en pesos colombianos y chilenos). */
+    fun local(v: Double) = nl(v)
 }
 
 /** Lee montos escritos como 12.5, 12,50 o 1.234,56. */
@@ -188,7 +245,7 @@ fun monthlyIncome(d: JsonObject): Double {
     }
     return srcs.sumOf { s ->
         val a = usdOf(d, s.num("amount"), s.str("currency"))
-        when (s.str("frequency")) { "quincenal" -> a * 2; "mensual" -> a; else -> 0.0 }
+        when (s.str("frequency")) { "semanal" -> a * 52 / 12; "quincenal" -> a * 2; "mensual" -> a; else -> 0.0 }
     }
 }
 
@@ -200,6 +257,10 @@ fun periodIncome(d: JsonObject, p: Period): Double {
     for (s in srcs) {
         val a = usdOf(d, s.num("amount"), s.str("currency"))
         when (s.str("frequency")) {
+            "semanal" -> {
+                val dow = (s["payDays"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.intOrNull ?: 5
+                inc += a * weekdayCount(dow, p.from, p.to)
+            }
             "quincenal" -> inc += a * (if (p.half == 0) 2 else 1)
             "mensual" -> {
                 val day = (s["payDays"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.intOrNull ?: 1

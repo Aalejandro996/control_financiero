@@ -21,7 +21,7 @@ val LEGAL = listOf(
     "Qué es Quincena" to "Una herramienta gratuita para organizar tu dinero. No ofrece asesoría financiera, legal ni contable: sus cálculos son estimaciones y las decisiones son tuyas.",
     "Qué datos guardamos" to "Tu usuario, tu correo y la información financiera que tú registras: ingresos, gastos, cuentas, deudas, préstamos, pagos y compromisos. Nunca registres claves bancarias, PIN ni datos de tarjetas.",
     "Para qué los usamos" to "Solo para que Quincena funcione: mostrarte tus cuentas, sincronizarlas, enviarte avisos y recuperar tu contraseña. No vendemos tus datos ni los usamos para publicidad.",
-    "Quién más interviene" to "El servidor donde se aloja Quincena, el servicio de correo para recuperar tu contraseña y un servicio público de tasas (BCV y USDT) que no recibe tus datos.",
+    "Quién más interviene" to "El servidor donde se aloja Quincena, el servicio de correo para recuperar tu contraseña y servicios públicos de tipo de cambio según tu país, que no reciben tus datos.",
     "Seguridad" to "Conexión cifrada, contraseña guardada con hash y, en el teléfono, datos cifrados con una llave que no sale del equipo. Puedes exigir huella o rostro y cerrar la sesión en tus otros teléfonos desde Más.",
     "Tus derechos" to "Puedes ver, corregir, descargar y eliminar tus datos cuando quieras desde Más (Constitución de Venezuela, artículos 28 y 60).",
     "Tu cuenta" to "Debes tener 18 años o más. Eres responsable de tu contraseña y de lo que registras.",
@@ -54,6 +54,7 @@ fun AuthScreen(st: AppState) {
     var email by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var accept by remember { mutableStateOf(false) }
+    var country by remember { mutableStateOf(guessCountry()) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val p = pal
@@ -88,6 +89,7 @@ fun AuthScreen(st: AppState) {
                 "registro" -> {
                     Field("Usuario", user, { user = it })
                     Field("Correo", email, { email = it }, kind = KeyboardType.Email)
+                    Select("¿En qué país vives?", COUNTRIES.map { it.code to it.name }, country) { country = it }
                     Field("Contraseña (mínimo 12 caracteres)", pass, { pass = it }, password = true)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(accept, { accept = it }, colors = CheckboxDefaults.colors(checkedColor = p.g))
@@ -112,7 +114,7 @@ fun AuthScreen(st: AppState) {
                         pass.length < 12 -> error = "Usa una contraseña de al menos 12 caracteres."
                         pass.lowercase().contains(user.trim().lowercase()) -> error = "La contraseña no debe contener tu nombre de usuario."
                         !accept -> error = "Debes aceptar los términos y la política de privacidad para crear tu cuenta."
-                        else -> submit { st.repo.register(user, email, pass) }
+                        else -> submit { st.repo.register(user, email, pass, country) }
                     }
                 }, enabled = !busy)
                 "olvide" -> Btn("Enviarme el enlace", {

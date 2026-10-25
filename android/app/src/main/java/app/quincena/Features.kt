@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import java.time.LocalDate
 import java.time.YearMonth
@@ -251,12 +252,12 @@ fun PoderCard(st: AppState) {
         else {
             val days = ChronoUnit.DAYS.between(ref.first, LocalDate.now()).toInt()
             val pct = (b / ref.second - 1) * 100
-            Text("En $days ${if (days == 1) "día" else "días"} el dólar BCV pasó de Bs. ${f.plain(ref.second)} a Bs. ${f.plain(b)} (${if (pct >= 0) "+" else ""}${f.plain(pct)} %).")
+            Text(loc("En $days ${if (days == 1) "día" else "días"} el dólar BCV pasó de Bs. ${f.plain(ref.second)} a Bs. ${f.plain(b)} (${if (pct >= 0) "+" else ""}${f.plain(pct)} %)."))
             if (sv > 0) {
                 val before = sv / ref.second
                 val now = sv / b
                 Column {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Tus Bs. ${if (st.hide) "••••" else f.plain(sv)} valían"); Amt(f.orig(before, "USD")) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(loc("Tus Bs. ${if (st.hide) "••••" else f.local(sv)} valían")); Amt(f.orig(before, "USD")) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Hoy valen"); Amt(f.orig(now, "USD")) }
                 }
                 if (before - now > .005) Pill("Perdieron ${f.orig(before - now, "USD")} de valor", pal.bad.copy(alpha = .15f), pal.bad)
@@ -399,12 +400,47 @@ fun UpdateCard(st: AppState) {
     }
 }
 
+/** Tarjeta de Más para ver o cambiar el país (define la moneda local y el tipo de cambio). */
+@Composable
+fun PaisMasCard(st: AppState) {
+    QCard {
+        B("País y moneda")
+        Mut("${Loc.cur.name} · tu moneda es ${Loc.cur.plural}${if (Loc.code == "VE") "" else " (${Loc.cur.sym})"}. Tu tipo de cambio se actualiza solo.")
+        Btn("Cambiar de país", { st.open("pais") }, outline = true)
+    }
+}
+
+@Composable
+fun PaisForm(st: AppState) {
+    var c by remember { mutableStateOf(Loc.code) }
+    Title("País y moneda", 28.sp, pal.ink)
+    Mut("Elige dónde vives. Cambiamos la moneda local y el tipo de cambio. Tus montos guardados en moneda local se mantienen tal cual, solo cambia la moneda con la que se muestran.")
+    Select("País", COUNTRIES.map { it.code to it.name }, c) { c = it }
+    Btn("Guardar", {
+        val n = COUNTRIES.firstOrNull { it.code == c }
+        st.close()
+        if (n != null && n.code != Loc.code) {
+            st.scope.launch {
+                st.repo.edit { m ->
+                    m["country"] = JsonPrimitive(n.code)
+                    m["exchangeRate"] = JsonPrimitive(n.rate)
+                    m["marketRate"] = JsonPrimitive(0.0)
+                    m["rateHistory"] = JsonArray(emptyList())
+                }
+                st.rateInfo = st.repo.updateRate()
+            }
+            st.toast("Listo: ahora usas ${n.plural}.")
+        }
+    })
+    Btn("Cancelar", { st.close() }, outline = true)
+}
+
 @Composable
 fun BolsaMasCard(st: AppState) {
     val sv = st.repo.data.num("bsSavings")
     QCard {
         B("Mis bolívares guardados")
         Mut("Dinos cuántos bolívares tienes y te mostramos cuánto valor pierden con el tiempo. Si agregas cuentas en Bs., se calcula solo.")
-        Btn(if (sv > 0) "Actualizar: Bs. ${if (st.hide) "••••" else Fmt(false, false, 1.0).plain(sv)}" else "Agregar mis bolívares", { st.open("bolsa") }, outline = true)
+        Btn(if (sv > 0) "Actualizar: Bs. ${if (st.hide) "••••" else Fmt(false, false, 1.0).local(sv)}" else "Agregar mis bolívares", { st.open("bolsa") }, outline = true)
     }
 }

@@ -46,7 +46,7 @@ fun Rich(vararg parts: Any) = Text(buildAnnotatedString {
     }
 })
 
-private fun freqLabel(f: String?) = when (f) { "quincenal" -> "Cada quincena"; "mensual" -> "Una vez al mes"; "ocasional" -> "Solo una vez"; else -> f ?: "" }
+private fun freqLabel(f: String?) = when (f) { "semanal" -> "Cada semana"; "quincenal" -> "Cada quincena"; "mensual" -> "Una vez al mes"; "ocasional" -> "Solo una vez"; else -> f ?: "" }
 private fun meses(n: Int) = "$n ${if (n == 1) "mes" else "meses"}"
 
 // =====================================================================
@@ -138,7 +138,7 @@ fun Inicio(st: AppState) {
             }
             if (cp.due > 0) Text("Ya descontado: ${f.show(cp.due)} en pagos de este periodo", fontSize = 13.sp)
             val mk = marketRateOf(d)
-            Text("BCV Bs. ${f.plain(rateOf(d))}${if (mk > 0) " · USDT Bs. ${f.plain(mk)}" else ""}${if (st.rateInfo == "sin actualizar") " · sin actualizar" else ""}",
+            Text(loc("BCV Bs. ${f.plain(rateOf(d))}${if (mk > 0) " · USDT Bs. ${f.plain(mk)}" else ""}${if (st.rateInfo == "sin actualizar") " · sin actualizar" else ""}"),
                 fontSize = 12.5.sp, color = Color.White.copy(alpha = .8f), maxLines = 1)
         }
     }
@@ -213,10 +213,10 @@ fun Tile(t: TileData, modifier: Modifier = Modifier) {
             .padding(horizontal = 13.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        Text(t.k, fontSize = 12.5.sp, color = p.mut, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(t.v, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = if (t.color == Color.Unspecified) p.ink else t.color,
+        Text(loc(t.k), fontSize = 12.5.sp, color = p.mut, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(loc(t.v), fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = if (t.color == Color.Unspecified) p.ink else t.color,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(t.s, fontSize = 12.5.sp, color = p.mut, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(loc(t.s), fontSize = 12.5.sp, color = p.mut, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -351,7 +351,7 @@ fun TasasCard(st: AppState) {
             t.tagged == 0 -> Mut("Este mes registraste ${t.n} ${if (t.n == 1) "gasto" else "gastos"} en bolívares, todos a tasa BCV. Si cambiaste dólares por USDT u otra tasa, márcalo en el gasto para ver tu costo real.")
             else -> {
                 Column {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Al BCV equivalen a"); Amt(f.orig(t.atBcv, "USD")) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(loc("Al BCV equivalen a")); Amt(f.orig(t.atBcv, "USD")) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Con las tasas que usaste"); Amt(f.orig(t.real, "USD")) }
                 }
                 when {
@@ -367,7 +367,7 @@ fun TasasCard(st: AppState) {
 @Composable
 fun Pill(text: String, bg: Color, fg: Color) {
     Box(Modifier.clip(CircleShape).background(bg).padding(horizontal = 10.dp, vertical = 3.dp)) {
-        Text(text, color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(loc(text), color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -568,6 +568,7 @@ fun Mas(st: AppState) {
 
     Head(st)
     MisCuentasCard(st)
+    PaisMasCard(st)
     if (bsBalance(repo.data) == null) BolsaMasCard(st)
     DetectarCard(st)
     HabitoCard(st)
