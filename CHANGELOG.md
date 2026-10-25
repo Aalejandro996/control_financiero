@@ -8,6 +8,31 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · seguridad del servidor] — 25 oct 2026
+
+Solo servidor y web. **No hay cambios en la app Android** (no hace falta compilar otro APK).
+
+### Agregado
+- **Recuperación de clave por correo:** enlace de un solo uso que vence, el mismo mensaje exista o no el correo
+  (no se puede averiguar quién tiene cuenta) y máximo 3 correos por hora por dirección.
+- **Avisos de seguridad por correo** (solo a correos verificados): cambio o restablecimiento de clave, cierre de
+  sesiones en otros dispositivos y inicio de sesión desde un teléfono nuevo.
+- **Envío por Brevo (HTTPS):** el plan gratis de Render bloquea SMTP, así que los correos salen por la API de Brevo.
+  Se configura con `BREVO_API_KEY` y `MAIL_FROM`.
+- **Límite general de uso** de la API y límite de intentos de acceso **por usuario**, además del límite por IP.
+- Pruebas automáticas: `tests/security_test.py` (inyección SQL, sesiones, IDOR, CSRF, límites, correos) y
+  `tests/xss_test.py` (navegador real).
+
+### Cambiado
+- Los enlaces de verificación y de recuperación viajan en el fragmento `#` de la URL, que no llega a los registros
+  del servidor ni a otros sitios por la cabecera Referer.
+- Al cambiar o restablecer la clave se cierran las demás sesiones web (una vez tras este despliegue, todos volverán a
+  iniciar sesión) y, al restablecerla un administrador, también las de la app.
+- Comparación de claves con tiempo parecido exista o no el usuario; claves de más de 1000 caracteres se rechazan.
+- Los errores 413, 429, 404, 405 y 500 devuelven mensajes genéricos en JSON; nunca detalles internos.
+- La dirección IP del registro de auditoría sale de la conexión real validada.
+- `.gitignore` ahora excluye `.env`, bases de datos, `instance/`, llaves y `android/app/release/`.
+
 ## [1.6.0] — 25 oct 2026 · app 1.9 (versionCode 105, compilada por GitHub)
 
 ### Agregado

@@ -2,7 +2,7 @@ services:
   - type: web
     name: control-financiero
     runtime: python
-    plan: free  # El envío de correo por SMTP exige un plan de pago (starter o superior)
+    plan: free  # En el plan gratis Render bloquea SMTP: los correos salen por la API HTTPS de Brevo
     region: ohio
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 60
@@ -37,6 +37,8 @@ services:
       - key: SMTP_PASSWORD
         sync: false
       - key: MAIL_FROM
+        sync: false
+      - key: BREVO_API_KEY
         sync: false
   - type: cron
     name: control-financiero-recordatorios

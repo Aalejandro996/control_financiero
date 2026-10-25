@@ -4,3 +4,16 @@ android/app/build/
 android/local.properties
 android/.idea/
 *.jks
+
+# Secretos y datos locales: nunca al repositorio
+.env
+.env.*
+instance/
+*.db
+*.sqlite3
+*.keystore
+keystore.properties
+android/app/release/
+__pycache__/
+*.pyc
+.DS_Store

@@ -14,8 +14,11 @@ import hashlib
 import smtplib
 import ssl
 import time
+import threading
+import urllib.error
 import urllib.request
 from email.message import EmailMessage
+from email.utils import parseaddr
 from html import escape as html_escape
 from zoneinfo import ZoneInfo
 from functools import wraps
@@ -74,7 +77,8 @@ app.config.update(
     MAX_CONTENT_LENGTH=2 * 1024 * 1024,
 )
 db = SQLAlchemy(app)
-limiter = Limiter(get_remote_address, app=app, default_limits=[], storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"))
+limiter = Limiter(get_remote_address, app=app, default_limits=[os.getenv("API_DEFAULT_LIMIT", "240 per minute")],
+                  storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"))
 
 DEFAULT_SHARED_DATA = {
     "currency": "USD",
@@ -282,7 +286,7 @@ def audit(action: str, detail: str = "", user_id: int | None = None) -> None:
         db.session.add(AuditEvent(
             user_id=user_id if user_id is not None else session.get("uid"),
             action=action[:64], detail=detail[:255] if detail else None,
-            ip_address=(request.headers.get("X-Forwarded-For", request.remote_addr or "") or "")[:64],
+            ip_address=(request.remote_addr or "")[:64],  # ProxyFix ya tomó la IP real del proxy de Render; X-Forwarded-For lo escribe el cliente
         ))
         db.session.commit()
     except Exception:
@@ -295,6 +299,32 @@ COMMON_PASSWORDS = {
     "venezuela123", "venezuela1234", "123456789abc", "abc123456789", "quincena1234", "quincena12345", "000000000000",
     "111111111111", "iloveyou1234", "admin1234567", "administrador", "caracas12345", "123123123123", "qwerty123456",
 }
+
+
+def pw_stamp(user: "User") -> str:
+    """Huella de la contraseña actual. Si la contraseña cambia, las sesiones web abiertas con la anterior dejan de valer."""
+    return hashlib.sha256(("qz1:" + user.password_hash).encode()).hexdigest()[:20]
+
+
+DUMMY_HASH = generate_password_hash("quincena-" + secrets.token_hex(12))
+
+
+def verify_login(user: "User | None", password: str) -> bool:
+    """Comprueba la contraseña tardando lo mismo exista o no el usuario (evita adivinar usuarios por el tiempo de respuesta)."""
+    if len(password) > 1000:  # nadie escribe 1000 caracteres; evita gastar CPU con claves enormes
+        return False
+    ok = check_password_hash(user.password_hash if user else DUMMY_HASH, password)
+    return bool(ok and user)
+
+
+def _login_name_key() -> str:
+    body = request.get_json(silent=True) or {}
+    return "login:" + str(body.get("username", "")).strip().lower()[:40]
+
+
+def _forgot_email_key() -> str:
+    body = request.get_json(silent=True) or {}
+    return "forgot:" + str(body.get("email", "")).strip().lower()[:120]
 
 
 def password_problem(password: str, username: str = "") -> str | None:
@@ -351,6 +381,9 @@ def current_user() -> User | None:
         session["seen"] = now
     user = db.session.get(User, user_id)
     if user is None or not user.active:
+        session.clear()
+        return None
+    if session.get("ps") != pw_stamp(user):  # la contraseña cambió después de abrir esta sesión
         session.clear()
         return None
     return user
@@ -831,6 +864,7 @@ def webauthn_settings() -> tuple[str, str]:
 def establish_user_session(user: User) -> dict:
     session.clear()
     session["uid"] = user.id
+    session["ps"] = pw_stamp(user)
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     audit("passkey_login_succeeded", "Inicio de sesión mediante passkey", user.id)
@@ -928,11 +962,13 @@ def add_security_headers(response):
     return response
 
 
+@limiter.exempt
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@limiter.exempt
 @app.get("/service-worker.js")
 def service_worker():
     response = send_from_directory(app.static_folder, "service-worker.js")
@@ -1002,6 +1038,8 @@ def revoke_devices():
     n = revoke_other_devices(g.user.id)
     db.session.commit()
     audit("devices_revoked", f"Sesión cerrada en {n} dispositivo(s)", g.user.id)
+    if n:
+        notify_security(g.user, "Se cerraron sesiones en sus dispositivos – Quincena", f"Se cerró la sesión de Quincena en {n} dispositivo(s) de su cuenta, a petición suya.")
     return jsonify(ok=True, revoked=n)
 
 
@@ -1028,6 +1066,7 @@ def legal_pages():
     return response
 
 
+@limiter.exempt
 @app.get("/healthz")
 def healthz():
     try:
@@ -1083,6 +1122,7 @@ def setup_admin():
     ensure_user_state(user.id)
     session.clear()
     session["uid"] = user.id
+    session["ps"] = pw_stamp(user)
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     audit("setup_completed", "Cuenta administradora inicial creada", user.id)
@@ -1091,16 +1131,19 @@ def setup_admin():
 
 @app.post("/api/login")
 @limiter.limit("10 per minute")
+@limiter.limit("30 per hour", key_func=_login_name_key)  # frena también los ataques repartidos entre muchas IP
 def login():
     body = request.get_json(silent=True) or {}
     username = str(body.get("username", "")).strip().lower()
     password = str(body.get("password", ""))
     user = User.query.filter_by(username=username, active=True).first()
-    if not user or not check_password_hash(user.password_hash, password):
-        audit("login_failed", f"Usuario: {username[:40]}", user_id=user.id if user else None)
+    if not verify_login(user, password):
+        # No se guarda lo que se escribió si el usuario no existe: a veces la gente pega aquí su contraseña.
+        audit("login_failed", f"Usuario: {user.username}" if user else "Usuario inexistente", user_id=user.id if user else None)
         return jsonify(error="Usuario o contraseña incorrectos."), 401
     session.clear()
     session["uid"] = user.id
+    session["ps"] = pw_stamp(user)
     session["seen"] = time.time()
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
@@ -1310,8 +1353,32 @@ def registration_open() -> bool:
     return os.getenv("ALLOW_REGISTRATION", "false").lower() == "true" and not setup_required()
 
 
+def mail_configured() -> bool:
+    return bool(os.getenv("BREVO_API_KEY", "").strip() or (os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD")))
+
+
 def send_mail(to: str, subject: str, body: str, html_body: str | None = None) -> bool:
-    """Envía correo por SMTP de Gmail usando una contraseña de aplicación."""
+    """Envía un correo. Prefiere la API HTTPS de Brevo (funciona en el plan gratis de Render, que bloquea SMTP);
+    si no hay BREVO_API_KEY, usa SMTP de Gmail con contraseña de aplicación."""
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
+    if api_key:
+        name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
+        if not addr:
+            app.logger.error("Correo no enviado: MAIL_FROM debe ser un remitente verificado en Brevo, p. ej. Quincena <tu@correo.com>.")
+            return False
+        payload = {"sender": {"name": name or "Quincena", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
+        if html_body:
+            payload["htmlContent"] = html_body
+        req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode("utf-8"), method="POST",
+                                     headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return 200 <= response.status < 300
+        except urllib.error.HTTPError as error:
+            app.logger.warning("Brevo rechazó el correo (HTTP %s).", error.code)  # sin el cuerpo: podría traer datos del destinatario
+        except Exception:
+            app.logger.warning("No se pudo contactar a Brevo para enviar el correo.")
+        return False
     smtp_user, smtp_password = os.getenv("SMTP_USER", ""), os.getenv("SMTP_PASSWORD", "")
     if not smtp_user or not smtp_password:
         return False
@@ -1327,7 +1394,36 @@ def send_mail(to: str, subject: str, body: str, html_body: str | None = None) ->
             smtp.send_message(message)
         return True
     except Exception:
+        app.logger.warning("No se pudo enviar el correo por SMTP (Render gratis bloquea SMTP: usa BREVO_API_KEY).")
         return False
+
+
+def send_mail_async(to: str, subject: str, body: str, html_body: str | None = None) -> None:
+    """Envía en segundo plano: la respuesta tarda igual exista o no el correo (no se puede adivinar quién tiene cuenta)."""
+    threading.Thread(target=lambda: send_mail(to, subject, body, html_body), daemon=True).start()
+
+
+def public_origin() -> str:
+    """Dirección pública para los enlaces de los correos. En producción solo la configurada: si se usara la cabecera Host
+    que manda quien hace la petición, alguien podría mandar a la víctima un enlace a un sitio falso."""
+    configured = os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/")
+    if configured:
+        return configured
+    return "" if os.getenv("RENDER") else request.host_url.rstrip("/")
+
+
+def notify_security(user: "User", subject: str, message: str) -> None:
+    """Aviso de seguridad al correo confirmado de la persona (cambio de clave, nuevo dispositivo…)."""
+    if not user.email or not user.email_verified_at or not mail_configured():
+        return
+    when = datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "America/Caracas"))).strftime("%d/%m/%Y %H:%M")
+    tail = ("Si usted no fue, restablezca su contraseña de inmediato desde la pantalla de acceso («¿Olvidaste tu contraseña?») "
+            "y cierre las sesiones de sus otros dispositivos desde Más.")
+    text = f"Estimado/a {user.username}:\n\n{message}\nFecha: {when} (hora de Caracas).\n\n{tail}\n\nAtentamente,\nEl equipo de Quincena"
+    page = ('<!doctype html><html lang="es"><body style="font-family:Arial,Helvetica,sans-serif;color:#12211B;line-height:1.6">'
+            f'<p>Estimado/a <b>{html_escape(user.username)}</b>:</p><p>{html_escape(message)}<br>Fecha: {when} (hora de Caracas).</p>'
+            f'<p>{html_escape(tail)}</p><p>Atentamente,<br>El equipo de Quincena</p></body></html>')
+    send_mail_async(user.email, subject, text, page)
 
 
 def reset_email(username: str, link: str, validity: str = "60 minutos", intro: str = "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena.", cta: str = "Restablecer contraseña", ignore: str = "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.") -> tuple[str, str]:
@@ -1363,6 +1459,7 @@ def reset_email(username: str, link: str, validity: str = "60 minutos", intro: s
 def start_session(user: "User"):
     session.clear()
     session["uid"] = user.id
+    session["ps"] = pw_stamp(user)
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password})
@@ -1403,11 +1500,15 @@ def send_verification(user: "User") -> bool:
     EmailVerification.query.filter_by(user_id=user.id, used_at=None).delete()
     db.session.add(EmailVerification(user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(hours=24)))
     db.session.commit()
-    origin = os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or request.host_url.rstrip("/")
-    text_body, html_body = reset_email(user.username, f"{origin}/?verify={token}", "24 horas",
+    origin = public_origin()
+    if not origin or not mail_configured():
+        return False
+    # El código va tras "#": el navegador nunca lo envía al servidor, así no queda en registros ni en cabeceras Referer.
+    text_body, html_body = reset_email(user.username, f"{origin}/#verify={token}", "24 horas",
                                        "Gracias por crear su cuenta en Quincena. Para activar la recuperación de su contraseña, necesitamos confirmar su correo electrónico.",
                                        "Confirmar correo", "Si usted no creó esta cuenta, puede ignorar este mensaje.")
-    return send_mail(user.email, "Confirme su correo electrónico – Quincena", text_body, html_body)
+    send_mail_async(user.email, "Confirme su correo electrónico – Quincena", text_body, html_body)
+    return True
 
 
 @app.post("/api/verify-email")
@@ -1444,12 +1545,13 @@ def resend_verification():
 
 @app.post("/api/mobile/login")
 @limiter.limit("10 per minute")
+@limiter.limit("30 per hour", key_func=_login_name_key)
 def mobile_login():
     body = request.get_json(silent=True) or {}
     username = str(body.get("username", "")).strip().lower()
     user = User.query.filter_by(username=username, active=True).first()
-    if not user or not check_password_hash(user.password_hash, str(body.get("password", ""))):
-        audit("login_failed", f"App móvil. Usuario: {username[:40]}", user_id=user.id if user else None)
+    if not verify_login(user, str(body.get("password", ""))):
+        audit("login_failed", f"App móvil. Usuario: {user.username}" if user else "App móvil. Usuario inexistente", user_id=user.id if user else None)
         return jsonify(error="Usuario o contraseña incorrectos."), 401
     if user.must_change_password:
         return jsonify(error="Cambia tu contraseña desde la versión web antes de usar la app."), 428
@@ -1458,6 +1560,8 @@ def mobile_login():
                                last_used_at=now, expires_at=now + timedelta(days=90)))
     db.session.commit()
     audit("login_succeeded", "Inicio de sesión desde la app móvil", user.id)
+    notify_security(user, "Nuevo inicio de sesión en su cuenta – Quincena",
+                    f"Se inició sesión en su cuenta desde la app de Android ({str(body.get('device') or 'dispositivo').strip()[:60]}).")
     return jsonify(ok=True, token=token, user={"username": user.username, "role": user.role})
 
 
@@ -1474,6 +1578,7 @@ def mobile_logout():
 
 @app.post("/api/forgot-password")
 @limiter.limit("5 per hour")
+@limiter.limit("3 per hour", key_func=_forgot_email_key)  # nadie puede llenar de correos la bandeja de otra persona
 def forgot_password():
     email = str((request.get_json(silent=True) or {}).get("email", "")).strip().lower()
     user = User.query.filter(db.func.lower(User.email) == email, User.active.is_(True), User.email_verified_at.isnot(None)).first() if EMAIL_RE.match(email) else None
@@ -1482,10 +1587,14 @@ def forgot_password():
         token = secrets.token_urlsafe(32)
         db.session.add(PasswordReset(user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(minutes=60)))
         db.session.commit()
-        origin = os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or request.host_url.rstrip("/")
-        text_body, html_body = reset_email(user.username, f"{origin}/?reset={token}")
-        sent = send_mail(email, "Restablecimiento de contraseña – Quincena", text_body, html_body)
-        audit("password_reset_requested", "Enlace enviado" if sent else "No se pudo enviar el correo", user.id)
+        origin = public_origin()
+        if origin and mail_configured():
+            text_body, html_body = reset_email(user.username, f"{origin}/#reset={token}")
+            send_mail_async(email, "Restablecimiento de contraseña – Quincena", text_body, html_body)
+            audit("password_reset_requested", "Enlace solicitado", user.id)
+        else:
+            app.logger.error("Recuperación de clave sin correo configurado (BREVO_API_KEY/MAIL_FROM/APP_PUBLIC_ORIGIN).")
+            audit("password_reset_requested", "No se pudo enviar: el correo no está configurado", user.id)
     return jsonify(ok=True)  # misma respuesta exista o no el correo
 
 
@@ -1509,6 +1618,7 @@ def reset_password():
     db.session.commit()
     session.clear()
     audit("password_reset_done", "Contraseña restablecida por correo", user.id)
+    notify_security(user, "Su contraseña fue restablecida – Quincena", "La contraseña de su cuenta fue restablecida con el enlace enviado a su correo. Se cerró la sesión en todos sus dispositivos.")
     return jsonify(ok=True)
 
 
@@ -1536,8 +1646,11 @@ def change_password():
     g.user.must_change_password = False
     revoke_other_devices(g.user.id)
     db.session.commit()
+    if not getattr(g, "via_token", False):
+        session["ps"] = pw_stamp(g.user)  # esta sesión sigue abierta; las demás sesiones web quedan cerradas
     session["csrf_token"] = secrets.token_urlsafe(32)
     audit("password_changed", "Contraseña actualizada; se cerró la sesión en los demás dispositivos", g.user.id)
+    notify_security(g.user, "Su contraseña fue cambiada – Quincena", "La contraseña de su cuenta fue cambiada. Se cerró la sesión en sus demás dispositivos.")
     return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": g.user.username, "role": g.user.role, "must_change_password": False})
 
 
@@ -1691,7 +1804,9 @@ def reset_user_password(user_id: int):
     temporary_password = "".join(secrets.choice(alphabet) for _ in range(18))
     user.password_hash = generate_password_hash(temporary_password)
     user.must_change_password = True
+    DeviceToken.query.filter_by(user_id=user.id, revoked_at=None).update({"revoked_at": datetime.now(timezone.utc)})
     db.session.commit()
+    notify_security(user, "Un administrador restableció su contraseña – Quincena", "Un administrador de Quincena restableció la contraseña de su cuenta. Deberá cambiarla al entrar.")
     audit("password_reset_by_admin", f"Contraseña restablecida para {user.username}", g.user.id)
     return jsonify(ok=True, temporary_password=temporary_password)
 
@@ -1767,6 +1882,27 @@ def delete_account():
 @app.errorhandler(413)
 def request_too_large(_error):
     return jsonify(error="La solicitud supera el tamaño máximo permitido."), 413
+
+
+@app.errorhandler(429)
+def too_many_requests(_error):
+    return jsonify(error="Demasiados intentos. Espera unos minutos e inténtalo de nuevo."), 429
+
+
+@app.errorhandler(404)
+def not_found(error):
+    return (jsonify(error="No encontrado."), 404) if request.path.startswith("/api/") else error
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return (jsonify(error="Método no permitido."), 405) if request.path.startswith("/api/") else error
+
+
+@app.errorhandler(500)
+def server_error(_error):
+    app.logger.exception("Error interno")  # el detalle queda solo en el registro del servidor
+    return jsonify(error="Algo salió mal en el servidor. Inténtalo de nuevo en unos minutos."), 500
 
 
 with app.app_context():
