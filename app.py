@@ -1027,6 +1027,13 @@ def robots():
 
 
 @limiter.exempt
+@app.get("/google65c83ff0e56e9e6a.html")
+def google_site_verification():
+    # Archivo con el que Google Search Console comprueba que el sitio es nuestro; debe quedarse publicado.
+    return send_from_directory(app.static_folder, "google65c83ff0e56e9e6a.html", mimetype="text/html")
+
+
+@limiter.exempt
 @app.get("/sitemap.xml")
 def sitemap():
     origin = public_origin() or request.url_root.rstrip("/")

@@ -59,6 +59,9 @@ sm = visitor.get("/sitemap.xml")
 check("sitemap.xml es XML y lista la portada y las páginas legales",
       sm.mimetype == "application/xml" and all(f"<loc>https://quincena.example{p}</loc>" in sm.get_data(as_text=True) for p in ("/", "/terminos", "/privacidad")))
 
+r = visitor.get("/google65c83ff0e56e9e6a.html")
+check("el archivo de verificación de Google responde en la raíz", r.status_code == 200 and r.get_data(as_text=True).strip() == "google-site-verification: google65c83ff0e56e9e6a.html")
+
 print("== Enlaces de correo ==")
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app.py"), encoding="utf-8").read()
 check("los correos de verificación y recuperación abren /app", '/app#verify=' in src and '/app#reset=' in src and '}/#verify=' not in src)
