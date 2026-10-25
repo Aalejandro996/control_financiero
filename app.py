@@ -98,6 +98,18 @@ def clean_country(value) -> str:
     return code if code in COUNTRIES else DEFAULT_COUNTRY
 
 
+SOURCE_UNSAFE = re.compile(r"[^a-z0-9._-]")
+
+
+def clean_source(value, user_agent: str = "") -> str | None:
+    """Origen del registro según los utm del enlace ("facebook/post1"). Sin campaña: "android" si viene de la app, o None."""
+    parts = [SOURCE_UNSAFE.sub("", part.strip().lower().replace(" ", "-"))[:30] for part in str(value or "").split("/")[:4]]
+    parts = [part for part in parts if part]
+    if parts:
+        return "/".join(parts)[:120]
+    return "android" if "okhttp" in user_agent.lower() else None
+
+
 DEFAULT_SHARED_DATA = {
     "country": DEFAULT_COUNTRY,  # país de la persona: define la moneda local, su tasa y cómo se muestran los montos
     "currency": "USD",
@@ -133,6 +145,7 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    signup_source = db.Column(db.String(120), nullable=True)  # de qué publicación o anuncio llegó (utm); None = directo
 
 
 class SharedState(db.Model):
@@ -216,11 +229,11 @@ class EmailVerification(db.Model):
 
 
 def migrate_user_email() -> None:
-    """Añade user.email y user.email_verified_at si faltan. Debe correr antes de cualquier consulta a User."""
+    """Añade user.email, user.email_verified_at y user.signup_source si faltan. Debe correr antes de cualquier consulta a User."""
     def columns() -> set:
         return {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}
 
-    for name, ddl in (("email", "VARCHAR(254)"), ("email_verified_at", "TIMESTAMP WITH TIME ZONE")):
+    for name, ddl in (("email", "VARCHAR(254)"), ("email_verified_at", "TIMESTAMP WITH TIME ZONE"), ("signup_source", "VARCHAR(120)")):
         if name in columns():
             continue
         try:
@@ -1509,14 +1522,15 @@ def register():
         return jsonify(error="Ese usuario ya existe. Elige otro."), 409
     if User.query.filter(db.func.lower(User.email) == email).first():
         return jsonify(error="Ya existe una cuenta con ese correo."), 409
-    user = User(username=username, email=email, password_hash=generate_password_hash(password), role="member", must_change_password=False)
+    source = clean_source(body.get("source"), request.headers.get("User-Agent", ""))
+    user = User(username=username, email=email, password_hash=generate_password_hash(password), role="member", must_change_password=False, signup_source=source)
     db.session.add(user)
     db.session.commit()
     record = ensure_user_state(user.id)
     country = clean_country(body.get("country"))
     record.data = {**copy.deepcopy(DEFAULT_SHARED_DATA), "country": country, "exchangeRate": COUNTRIES[country]["rate"]}
     db.session.commit()
-    audit("account_registered", f"Cuenta creada ({country}); aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
+    audit("account_registered", f"Cuenta creada ({country}, origen {source or 'directo'}); aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
     send_verification(user)
     return start_session(user)
 
@@ -1774,7 +1788,22 @@ def import_legacy_state():
 @require_auth(admin=True)
 def list_users():
     users = User.query.order_by(User.created_at.asc()).all()
-    return jsonify(users=[{"id": u.id, "username": u.username, "role": u.role, "active": u.active, "must_change_password": u.must_change_password, "created_at": u.created_at.isoformat() if u.created_at else None} for u in users])
+    return jsonify(users=[{"id": u.id, "username": u.username, "role": u.role, "active": u.active, "must_change_password": u.must_change_password, "created_at": u.created_at.isoformat() if u.created_at else None, "signup_source": u.signup_source} for u in users])
+
+
+@app.get("/api/signups")
+@require_auth(admin=True)
+def signups_by_source():
+    """Cuentas nuevas por origen (publicación o anuncio), para saber qué funciona antes de pagar publicidad."""
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    rows = {}
+    for source, created_at in db.session.query(User.signup_source, User.created_at).filter(User.role == "member").all():
+        row = rows.setdefault(source or "directo", {"source": source or "directo", "total": 0, "last_7_days": 0})
+        row["total"] += 1
+        if created_at and (created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)) >= since:
+            row["last_7_days"] += 1
+    by_source = sorted(rows.values(), key=lambda r: (-r["total"], r["source"]))
+    return jsonify(total=sum(r["total"] for r in by_source), by_source=by_source)
 
 
 @app.post("/api/users")

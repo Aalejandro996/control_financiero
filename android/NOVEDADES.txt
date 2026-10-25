@@ -1,1 +1,0 @@
-Esta versión usa una firma nueva. Si no se instala: abre la app con internet para sincronizar, desinstálala e instala esta. Tus datos están en tu cuenta.

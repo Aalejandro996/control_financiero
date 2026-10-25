@@ -8,6 +8,20 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · origen de los registros] — 25 oct 2026
+
+### Agregado
+- **Servidor y web — Origen de cada cuenta nueva:** si la persona llega por un enlace con `utm_source` / `utm_campaign`
+  (por ejemplo `/?utm_source=facebook&utm_campaign=post1`), la web lo guarda en el navegador, limpia la URL y lo envía al
+  registrarse. Se guarda en `user.signup_source` (columna nueva, se crea sola al arrancar). Con solo el `fbclid` de Meta
+  queda `meta`; desde la app Android sin campaña, `android`; sin nada, directo.
+- **Servidor — `/api/signups`** (solo administrador): cuentas nuevas por origen, en total y en los últimos 7 días.
+  `/api/users` también muestra el origen de cada cuenta. Pruebas: `tests/signup_source_test.py`.
+
+### Cambiado
+- `android/NOVEDADES.txt` vacío: el próximo APK ya no repite el aviso de firma nueva (sin texto se muestra
+  "Mejoras de seguridad y correcciones.").
+
 ## [Sin publicar · vista previa en redes] — 25 oct 2026
 
 ### Agregado
