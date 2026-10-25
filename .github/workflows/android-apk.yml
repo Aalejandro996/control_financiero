@@ -1,5 +1,5 @@
 # Compila el APK firmado cada vez que cambias algo dentro de android/ y lo publica en downloads/.
-# Ese commit hace que Render despliegue, y la app instalada avisa: "Nueva versión disponible".
+# Después se redespliega Render con un deploy hook (opcional), y la app instalada avisa: "Nueva versión disponible".
 name: APK Android
 
 on:
@@ -75,7 +75,9 @@ jobs:
         run: |
           mkdir -p downloads
           cp android/app/build/outputs/apk/release/app-release.apk downloads/quincena.apk
-          NOTES=$(git log -1 --pretty=%s | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()[:200]))')
+          # Novedades para el aviso de la app: se escriben en android/NOVEDADES.txt (en lenguaje sencillo).
+          # Si está vacío, se muestra "Mejoras de seguridad y correcciones."
+          NOTES=$(python3 -c 'import json,pathlib; p=pathlib.Path("android/NOVEDADES.txt"); t=" ".join(p.read_text(encoding="utf-8").split()) if p.exists() else ""; print(json.dumps((t or "Mejoras de seguridad y correcciones.")[:200]))')
           printf '{"versionCode": %s, "versionName": "%s", "notes": %s}\n' "$VERSION_CODE" "$VERSION_NAME" "$NOTES" > downloads/version.json
           git config user.name "quincena-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -83,3 +85,13 @@ jobs:
           git commit -m "APK $VERSION_NAME"
           git pull --rebase
           git push
+
+      - name: Redesplegar Render (solo si guardaste el secreto RENDER_DEPLOY_HOOK)
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Render está redesplegando con el APK nuevo."
+          else
+            echo "::notice::Sin secreto RENDER_DEPLOY_HOOK: lanza el despliegue a mano en Render (Manual Deploy › Deploy latest commit)."
+          fi
