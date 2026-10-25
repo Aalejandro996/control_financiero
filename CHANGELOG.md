@@ -19,6 +19,9 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 - **Servidor:** `/api/countries` y `/api/rate?country=XX` (Venezuela y Argentina por dolarapi, el resto por
   open.er-api.com). Pruebas nuevas: `tests/country_test.py` y `tests/country_ui_test.py`.
 
+### Corregido
+- **Web:** el botón de moneda del encabezado se partía en dos líneas con "COP $"; ahora muestra el código corto (COP, CLP, S/, MXN, ARS). Los números largos en los mosaicos de Inicio ya no se cortan con "…" y las filas de listas se acomodan mejor en pantallas angostas.
+
 ### Cambiado
 - Los textos de Venezuela (Bs., bolívares, BCV) se adaptan al país elegido; en pesos colombianos y chilenos los montos
   salen sin decimales. Las cuentas existentes siguen en Venezuela y no cambia nada para ellas.
