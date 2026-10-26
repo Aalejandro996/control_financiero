@@ -8,6 +8,23 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · Más, más simple] — 26 oct 2026
+
+### Cambiado
+- **Android — Más pasa de 13 tarjetas a 6:** País y moneda; Avisos (avisos de pago con sus interruptores y el
+  recordatorio diario en una sola tarjeta); Registrar desde el banco; Seguridad (huella o rostro, cambiar contraseña,
+  cerrar sesión en otros teléfonos); Mi cuenta (usuario y versión, descargar datos, cerrar sesión, eliminar cuenta); Legal.
+- **Web — Más pasa de 10 tarjetas a 5:** "Descargar la app" solo aparece en teléfonos Android.
+
+### Quitado
+- De Más (app y web): **Mis cuentas**, **Mi presupuesto** y **Mis bolívares guardados**, que ya están en
+  Movimientos → Cuentas y en Inicio.
+- De la web: **activar entrada con huella o rostro** y **activar avisos de pago** (la sesión web se cierra a los 30
+  minutos y la app da mejores avisos). Quien ya los activó los sigue recibiendo.
+
+### Corregido
+- `tests/country_ui_test.py` abre `/app` (en `/` está la presentación) y busca el enlace actual "Crea una gratis".
+
 ## [Sin publicar · enlaces de los correos abren la app] — 26 oct 2026
 
 ### Agregado

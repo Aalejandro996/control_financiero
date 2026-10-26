@@ -567,18 +567,33 @@ fun Mas(st: AppState) {
     }
 
     Head(st)
-    MisCuentasCard(st)
     PaisMasCard(st)
-    if (bsBalance(repo.data) == null) BolsaMasCard(st)
-    DetectarCard(st)
-    HabitoCard(st)
     QCard {
-        B("Mi presupuesto")
-        Mut("Cuánto quieres gastar al mes, en dólares. En Inicio lo ves por quincena (la mitad).")
-        Btn("Editar presupuesto", { st.open("presupuesto") }, outline = true)
+        B("Avisos")
+        Mut("Te avisamos desde tu teléfono cada pocas horas, nunca de noche.")
+        Btn(if (avisosOn) "Desactivar avisos de pago" else "Activar avisos de pago", {
+            if (avisosOn) { Reminders.disable(ctx); repo.setPref("avisos", null); avisosOn = false; st.toast("Avisos desactivados.") }
+            else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else turnOnAvisos()
+        }, outline = true)
+        if (avisosOn) {
+            AVISO_TIPOS.forEach { (k, label) ->
+                var on by remember { mutableStateOf(repo.pref("av_$k") != "0") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, Modifier.weight(1f), fontSize = 15.sp)
+                    androidx.compose.material3.Switch(on, { on = it; repo.setPref("av_$k", if (it) null else "0") },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = pal.g))
+                }
+            }
+            Mut("Pagos: 7, 4 y 1 día antes y el mismo día. Me deben: el día del cobro y si pasan 3 días sin pagar. Presupuesto: al llegar al 80 % de una categoría en la quincena. Versión nueva: una vez por versión.")
+        }
+        HorizontalDivider(color = pal.line)
+        HabitoSection(st)
     }
+    DetectarCard(st)
     QCard {
-        B("Seguridad y avisos")
+        B("Seguridad")
         Btn(if (lockOn) "Quitar entrada con huella o rostro" else "Activar entrada con huella o rostro", {
             if (lockOn) { repo.setPref("lock", null); lockOn = false; st.toast("Listo: ya no se pedirá la huella.") }
             else {
@@ -587,39 +602,25 @@ fun Mas(st: AppState) {
                 else st.toast("Configura una huella, rostro o bloqueo de pantalla en tu teléfono primero.")
             }
         }, outline = true)
-        Btn(if (avisosOn) "Desactivar avisos de pago" else "Activar avisos de pago", {
-            if (avisosOn) { Reminders.disable(ctx); repo.setPref("avisos", null); avisosOn = false; st.toast("Avisos desactivados.") }
-            else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-                askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
-            else turnOnAvisos()
-        }, outline = true)
-        Mut("Revisamos en tu teléfono cada pocas horas, nunca de noche. Elige qué quieres que te avise:")
-        if (avisosOn) AVISO_TIPOS.forEach { (k, label) ->
-            var on by remember { mutableStateOf(repo.pref("av_$k") != "0") }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(label, Modifier.weight(1f), fontSize = 15.sp)
-                androidx.compose.material3.Switch(on, { on = it; repo.setPref("av_$k", if (it) null else "0") },
-                    colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = pal.g))
+        Btn("Cambiar contraseña", { st.open("clave") }, outline = true)
+        Btn("Cerrar sesión en mis otros teléfonos", {
+            st.scope.launch {
+                try {
+                    val n = repo.revokeOthers()
+                    st.toast(if (n > 0) "Listo: cerramos la sesión en $n ${if (n == 1) "teléfono" else "teléfonos"}." else "No tenías sesión abierta en otros teléfonos.")
+                } catch (e: ApiError) { st.toast(e.message ?: "Algo salió mal.") }
+                catch (e: Offline) { st.toast("Sin conexión. Revisa tu internet e inténtalo de nuevo.") }
             }
-        }
-        Mut("Pagos: 7, 4 y 1 día antes y el mismo día. Me deben: el día del cobro y si pasan 3 días sin pagar. Presupuesto: al llegar al 80 % de una categoría en la quincena. Versión nueva: una vez por versión.")
-    }
-    SeguridadCard(st)
-    QCard {
-        B("Eliminar mi cuenta")
-        Mut("Borra para siempre tu cuenta y todos tus datos.")
-        OutlineDanger("Eliminar mi cuenta") { st.open("borrar") }
-    }
-    QCard {
-        B("Mis datos")
-        Btn("Descargar mis datos", { save.launch("quincena-mis-datos.json") }, outline = true)
+        }, outline = true)
     }
     QCard {
         B(repo.username.ifEmpty { "Mi cuenta" })
         Mut("Quincena VE ${BuildConfig.VERSION_NAME}")
+        Btn("Descargar mis datos", { save.launch("quincena-mis-datos.json") }, outline = true)
         Btn("Cerrar sesión", {
             st.scope.launch { Reminders.disable(ctx); repo.setPref("avisos", null); repo.setPref("lock", null); st.go("inicio"); repo.logout() }
         }, outline = true)
+        OutlineDanger("Eliminar mi cuenta") { st.open("borrar") }
     }
     LegalCard()
 }

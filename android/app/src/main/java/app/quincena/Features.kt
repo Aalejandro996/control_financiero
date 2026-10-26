@@ -434,13 +434,3 @@ fun PaisForm(st: AppState) {
     })
     Btn("Cancelar", { st.close() }, outline = true)
 }
-
-@Composable
-fun BolsaMasCard(st: AppState) {
-    val sv = st.repo.data.num("bsSavings")
-    QCard {
-        B("Mis bolívares guardados")
-        Mut("Dinos cuántos bolívares tienes y te mostramos cuánto valor pierden con el tiempo. Si agregas cuentas en Bs., se calcula solo.")
-        Btn(if (sv > 0) "Actualizar: Bs. ${if (st.hide) "••••" else Fmt(false, false, 1.0).local(sv)}" else "Agregar mis bolívares", { st.open("bolsa") }, outline = true)
-    }
-}

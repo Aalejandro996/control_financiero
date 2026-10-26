@@ -161,9 +161,9 @@ class HabitWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
 
 const val ACTION_NUEVO_GASTO = "app.quincena.NUEVO_GASTO"
 
-/** Tarjeta de Más: recordatorio diario a la hora que elijas. */
+/** Parte de la tarjeta Avisos de Más: recordatorio diario a la hora que elijas. */
 @Composable
-fun HabitoCard(st: AppState) {
+fun HabitoSection(st: AppState) {
     val ctx = LocalContext.current
     var on by remember { mutableStateOf(st.repo.pref("habito") != null) }
     var hour by remember { mutableStateOf(st.repo.pref("habito")?.toIntOrNull() ?: 20) }
@@ -174,7 +174,7 @@ fun HabitoCard(st: AppState) {
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) activate() else st.toast("Activa las notificaciones en los ajustes del teléfono.")
     }
-    QCard {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         B("Recordatorio diario")
         Mut("Solo te avisa si ese día no registraste nada. Los domingos, además, te llega el resumen de tu semana.")
         Select("Hora", listOf(18, 19, 20, 21, 22).map { it.toString() to "$it:00" }, hour.toString()) {

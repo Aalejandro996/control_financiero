@@ -47,10 +47,10 @@ def session(pw, tz, user, country_ui):
     page = ctx.new_page()
     page.route("**/api/rate*", fake_rate)
     page.on("dialog", lambda d: d.dismiss())
-    page.goto("/")
+    page.goto("/app")  # "/" es la página de presentación; la app vive en /app
     page.wait_for_timeout(1200)
     # abrir el formulario de registro desde la pantalla de entrada
-    page.get_by_text("Crear una cuenta", exact=False).first.click()
+    page.get_by_text("Crea una gratis", exact=False).first.click()
     page.wait_for_selector("select[name=country]")
     chosen = page.eval_on_selector("select[name=country]", "e => e.value")
     if country_ui:

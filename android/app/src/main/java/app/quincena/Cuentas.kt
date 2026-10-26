@@ -470,34 +470,6 @@ fun LegalCard() {
     }
 }
 
-@Composable
-fun SeguridadCard(st: AppState) {
-    QCard {
-        B("Tu cuenta")
-        Btn("Cambiar contraseña", { st.open("clave") }, outline = true)
-        Btn("Cerrar sesión en mis otros teléfonos", {
-            st.scope.launch {
-                try {
-                    val n = st.repo.revokeOthers()
-                    st.toast(if (n > 0) "Listo: cerramos la sesión en $n ${if (n == 1) "teléfono" else "teléfonos"}." else "No tenías sesión abierta en otros teléfonos.")
-                } catch (e: ApiError) { st.toast(e.message ?: "Algo salió mal.") }
-                catch (e: Offline) { st.toast("Sin conexión. Revisa tu internet e inténtalo de nuevo.") }
-            }
-        }, outline = true)
-    }
-}
-
-@Composable
-fun MisCuentasCard(st: AppState) {
-    val d = st.repo.data
-    val n = accounts(d).size
-    QCard {
-        B("Mis cuentas")
-        Mut(if (n > 0) "Tienes $n ${if (n == 1) "cuenta" else "cuentas"} · ≈ ${st.fmt.show(totalUsd(d))}" else "Banco, efectivo, Zelle, Binance… para saber cuánto tienes y dónde.")
-        Btn("Ver mis cuentas", { st.movSub = "cuentas"; st.go("movimientos") }, outline = true)
-    }
-}
-
 /** Pide aceptar los términos nuevos (una vez por versión). */
 @Composable
 fun TermsDialog(st: AppState) {
