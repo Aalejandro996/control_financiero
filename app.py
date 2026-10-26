@@ -1033,6 +1033,23 @@ def google_site_verification():
     return send_from_directory(app.static_folder, "google65c83ff0e56e9e6a.html", mimetype="text/html")
 
 
+# Huella SHA-256 del certificado con que GitHub Actions firma el APK (llave nueva de oct. 2026). Si se cambia la llave,
+# poner la nueva en ANDROID_CERT_SHA256 (varias separadas por coma) o los enlaces de los correos dejarán de abrir la app.
+ANDROID_CERT_SHA256 = "74:35:96:63:3F:11:A8:AA:7A:E1:8D:EF:E2:C7:E6:55:0B:4F:39:9F:AD:7D:EC:F7:F0:2A:85:30:09:C3:D8:0A"
+
+
+@limiter.exempt
+@app.get("/.well-known/assetlinks.json")
+def android_asset_links():
+    """Android App Links: le prueba a Android que este sitio y la app app.quincena son del mismo dueño, para que los
+    enlaces de los correos (/app#verify=…, /app#reset=…) abran la app si está instalada y la web si no."""
+    prints = [f.strip().upper() for f in (os.getenv("ANDROID_CERT_SHA256") or ANDROID_CERT_SHA256).split(",") if f.strip()]
+    response = jsonify([{"relation": ["delegate_permission/common.handle_all_urls"],
+                         "target": {"namespace": "android_app", "package_name": "app.quincena", "sha256_cert_fingerprints": prints}}])
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
 @limiter.exempt
 @app.get("/sitemap.xml")
 def sitemap():
