@@ -8,6 +8,15 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · enlaces de los correos abren la app] — 26 oct 2026
+
+### Agregado
+- **Android App Links:** los enlaces de los correos (`/app#verify=…` y `/app#reset=…`) abren la app si está instalada
+  y la web si no. El servidor publica `/.well-known/assetlinks.json` con la huella de la llave de firma (cambiable con
+  `ANDROID_CERT_SHA256`). Pruebas: `tests/app_links_test.py`.
+- **Android:** confirmar el correo desde el enlace (aviso "Tu correo quedó confirmado") y pantalla "Elige tu contraseña
+  nueva". Antes de cambiarla se suben los cambios pendientes; si la sesión del teléfono era de esa cuenta, se cierra.
+
 ## [Sin publicar · diagnóstico de correos] — 26 oct 2026
 
 ### Agregado

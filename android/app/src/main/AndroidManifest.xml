@@ -25,6 +25,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- Enlaces de los correos (confirmar correo, nueva contraseña): abren la app si está instalada y, si no, la web.
+                 El sitio lo autoriza en /.well-known/assetlinks.json con la huella de la llave de firma. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="control-financiero-wrm5.onrender.com" android:path="/app" />
+            </intent-filter>
             <!-- Atajo: mantener presionado el ícono > "Registrar gasto" -->
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>

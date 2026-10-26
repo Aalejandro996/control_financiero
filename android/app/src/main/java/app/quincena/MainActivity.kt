@@ -50,8 +50,12 @@ class MainActivity : FragmentActivity() {
     /** Acción al abrir: "gasto" desde el atajo del ícono o el recordatorio diario. */
     private var startAction by mutableStateOf<String?>(null)
 
+    /** Enlace de un correo: "verify" o "reset" con su código (va tras "#", como en la web). */
+    private var link by mutableStateOf<Pair<String, String>?>(null)
+
     private fun readShared(i: android.content.Intent?) {
         if (i?.action == ACTION_NUEVO_GASTO) { startAction = "gasto"; return }
+        if (i?.action == android.content.Intent.ACTION_VIEW) { link = emailLink(i.data); return }
         if (i == null || i.action != android.content.Intent.ACTION_SEND) return
         if (i.type?.startsWith("text/") != true) return
         shared = i.getStringExtra(android.content.Intent.EXTRA_TEXT)
@@ -76,7 +80,7 @@ class MainActivity : FragmentActivity() {
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { prompting = false }
         })
         readShared(intent)
-        setContent { App(repo, lock, resumes, shared, { shared = null }, startAction, { startAction = null }) { unlock() } }
+        setContent { App(repo, lock, resumes, shared, { shared = null }, startAction, { startAction = null }, link, { link = null }) { unlock() } }
     }
 
     override fun onResume() {
@@ -104,6 +108,14 @@ class MainActivity : FragmentActivity() {
                 .build()
         )
     }
+}
+
+/** Lee /app#verify=… o /app#reset=… (los enlaces de los correos). */
+fun emailLink(uri: android.net.Uri?): Pair<String, String>? {
+    val frag = uri?.fragment ?: return null
+    val kind = frag.substringBefore('=')
+    val token = frag.substringAfter('=', "").substringBefore('&')
+    return if (kind in setOf("verify", "reset") && token.length in 20..200 && token.all { it.isLetterOrDigit() || it == '-' || it == '_' }) kind to token else null
 }
 
 data class Sheet(val kind: String, val arg: String? = null)
@@ -163,19 +175,30 @@ class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHos
 @Composable
 fun App(
     repo: Repo, lock: LockState, resumes: Int, shared: String?, onShared: () -> Unit,
-    startAction: String?, onStartAction: () -> Unit, unlock: () -> Unit,
+    startAction: String?, onStartAction: () -> Unit,
+    link: Pair<String, String>?, onLink: () -> Unit, unlock: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val st = remember { AppState(repo, scope, snack) }
     LaunchedEffect(resumes) { st.update = repo.checkUpdate() }
+    LaunchedEffect(link) {
+        if (link == null || link.first != "verify") return@LaunchedEffect
+        onLink()
+        try {
+            repo.verifyEmail(link.second)
+            st.toast("¡Listo! Tu correo quedó confirmado.")
+            if (repo.loggedIn) st.mail = repo.emailStatus()
+        } catch (e: Exception) { st.toast(friendly(e)) }
+    }
     QuincenaTheme {
         val p = pal
         Box(Modifier.fillMaxSize().background(p.bg)) {
             when {
                 UpdateGate.required || st.update?.required == true -> ForceUpdateScreen(st.update)
-                !repo.loggedIn -> AuthScreen(st)
                 lock.locked -> LockScreen(unlock)
+                link != null && link.first == "reset" -> ResetScreen(st, link.second, onLink)
+                !repo.loggedIn -> AuthScreen(st)
                 else -> Main(st, resumes, shared, onShared, startAction, onStartAction)
             }
             SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 150.dp, start = 16.dp, end = 16.dp)) {

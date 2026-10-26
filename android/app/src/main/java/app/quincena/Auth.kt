@@ -38,7 +38,7 @@ fun LegalText() {
     Text(copyright(), fontSize = 13.sp, color = pal.mut)
 }
 
-private fun friendly(e: Exception): String = when (e) {
+fun friendly(e: Exception): String = when (e) {
     is Offline -> "Sin conexión. Revisa tu internet e inténtalo de nuevo."
     is ApiError -> e.message ?: "El servidor respondió con error ${e.status}."
     else -> "Error en la app: ${e.javaClass.simpleName}${e.message?.let { " – $it" } ?: ""}"
@@ -121,7 +121,7 @@ fun AuthScreen(st: AppState) {
                     if (email.isBlank()) error = "Escribe tu correo."
                     else submit {
                         st.repo.forgot(email); mode = "login"
-                        st.toast("Si el correo existe, te enviamos un enlace. Ábrelo en el navegador para elegir tu contraseña.")
+                        st.toast("Si el correo existe, te enviamos un enlace. Ábrelo en este teléfono para elegir tu contraseña.")
                     }
                 }, enabled = !busy)
                 else -> Btn("Entrar", { submit { st.repo.login(user, pass); pass = "" } }, enabled = !busy && user.isNotBlank() && pass.isNotEmpty())
@@ -135,6 +135,46 @@ fun AuthScreen(st: AppState) {
             }
             Text(copyright(), Modifier.fillMaxWidth(), fontSize = 12.sp, color = p.mut, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
+        }
+    }
+}
+
+/** Nueva contraseña desde el enlace del correo (igual que #reset= en la web). */
+@Composable
+fun ResetScreen(st: AppState, token: String, onDone: () -> Unit) {
+    var pass by remember { mutableStateOf("") }
+    var pass2 by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val p = pal
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(Modifier.widthIn(max = 380.dp).fillMaxWidth().padding(top = 56.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Title("Quincena VE 🇻🇪", 36.sp)
+            Mut("Elige tu contraseña nueva. Al guardarla se cerrará la sesión en todos tus teléfonos.")
+            Field("Contraseña nueva (mínimo 12 caracteres)", pass, { pass = it }, password = true)
+            Field("Repite la contraseña", pass2, { pass2 = it }, password = true)
+            error?.let { Text(it, color = p.bad, fontWeight = FontWeight.SemiBold) }
+            Btn("Guardar contraseña", {
+                when {
+                    pass.length < 12 -> error = "Usa una contraseña de al menos 12 caracteres."
+                    pass != pass2 -> error = "Las contraseñas no coinciden."
+                    else -> {
+                        busy = true; error = null
+                        st.scope.launch {
+                            try {
+                                st.repo.resetPassword(token, pass)
+                                onDone()
+                                st.toast("¡Listo! Entra con tu contraseña nueva.")
+                            } catch (e: Exception) { error = friendly(e) }
+                            busy = false
+                        }
+                    }
+                }
+            }, enabled = !busy)
+            Link("Cancelar", onDone)
         }
     }
 }

@@ -76,6 +76,17 @@ class Repo(ctx: Context) {
 
     suspend fun forgot(email: String) { api.call("POST", "/api/forgot-password", buildJsonObject { put("email", email.trim()) }) }
 
+    /** Confirma el correo con el código del enlace que llegó por correo. */
+    suspend fun verifyEmail(token: String) { api.call("POST", "/api/verify-email", buildJsonObject { put("token", token) }) }
+
+    /** Elige una contraseña nueva con el enlace del correo. El servidor cierra la sesión en todos los teléfonos. */
+    suspend fun resetPassword(token: String, new: String) {
+        if (loggedIn) refresh()  // antes de que se cierre la sesión, sube lo que esté pendiente
+        api.call("POST", "/api/reset-password", buildJsonObject { put("token", token); put("new_password", new) })
+        // Si la sesión de este teléfono era de esa cuenta, el servidor ya la cerró: se borra la copia local.
+        if (loggedIn && (runCatching { api.call("GET", "/api/email-status") }.exceptionOrNull() as? ApiError)?.status == 401) clearLocal()
+    }
+
     suspend fun emailStatus(): Pair<String?, Boolean>? = runCatching {
         val r = api.call("GET", "/api/email-status")
         r.str("email") to (r.bool("verified") == true)
