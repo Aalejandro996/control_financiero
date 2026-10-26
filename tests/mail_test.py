@@ -72,6 +72,15 @@ check("send_mail devuelve False si Brevo rechaza", A.send_mail("ana@x.com", "Hol
 check("el registro trae el mensaje exacto de Brevo", any("Key not found" in line and "401" in line for line in logs), logs)
 check("el registro nunca trae la clave", not any("xkeysib-secreta" in line for line in logs))
 
+print("== Plantilla de los correos ==")
+with A.app.test_request_context("/"):
+    text, page = A.reset_email("ana<b>", "https://control-financiero-wrm5.onrender.com/app#reset=abc")
+check("lleva el logo de Quincena VE", "/static/icons/icon-192.png" in page and "Quincena VE" in page)
+check("lleva la franja de la bandera", all(c in page for c in ("#FFCC00", "#00247D", "#CF142B")))
+check("lleva el botón con el enlace", 'href="https://control-financiero-wrm5.onrender.com/app#reset=abc"' in page)
+check("escapa el nombre de usuario", "ana&lt;b&gt;" in page and "ana<b>" not in page)
+check("el texto plano sigue igual de completo", "https://control-financiero-wrm5.onrender.com/app#reset=abc" in text)
+
 print("== /api/mail-test ==")
 os.environ.pop("RENDER")
 A.send_verification = lambda user: False
@@ -91,6 +100,7 @@ j = r.get_json()
 check("admin con Brevo bien: 200 y enviado", r.status_code == 200 and j["sent"] is True, j)
 check("devuelve la configuración detectada", j["config"]["brevo_api_key"] is True and j["config"]["mail_from"] == "Quincena VE <gigadevsc@gmail.com>"
       and j["config"]["app_public_origin"] == "https://control-financiero-wrm5.onrender.com" and j["config"]["problem"] is None, j)
+check("el correo de prueba va con la plantilla", "#FFCC00" in sent[-1][2].get("htmlContent", ""))
 check("devuelve el messageId de Brevo", "<abc@brevo>" in j["detail"], j)
 check("la respuesta nunca trae la clave", "xkeysib-secreta" not in r.get_data(as_text=True))
 A.urllib.request.urlopen = brevo_rejects

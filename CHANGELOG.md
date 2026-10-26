@@ -15,6 +15,11 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
   correo del administrador) y devuelve la configuración detectada (`BREVO_API_KEY` sí o no, `MAIL_FROM`,
   `APP_PUBLIC_ORIGIN`, qué falta) y la respuesta exacta de Brevo. Pruebas: `tests/mail_test.py`.
 
+### Cambiado
+- **Correos con la marca de Quincena VE:** una sola plantilla (`email_layout`) para la confirmación de correo, la
+  recuperación de contraseña, los avisos de seguridad y el correo de prueba: franja con la bandera, logo, nombre en
+  Bricolage Grotesque, botón verde #0B6B4D y pie con la dirección del sitio.
+
 ### Corregido
 - **Correos que no salían sin dejar rastro:** ahora el registro de Render dice por qué no se envió un correo de
   verificación o de recuperación (falta `BREVO_API_KEY`, `MAIL_FROM` o `APP_PUBLIC_ORIGIN`) y, si Brevo lo rechaza,

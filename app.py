@@ -1573,10 +1573,51 @@ def notify_security(user: "User", subject: str, message: str) -> None:
     tail = ("Si usted no fue, restablezca su contraseña de inmediato desde la pantalla de acceso («¿Olvidaste tu contraseña?») "
             "y cierre las sesiones de sus otros dispositivos desde Más.")
     text = f"Estimado/a {user.username}:\n\n{message}\nFecha: {when} (hora de Caracas).\n\n{tail}\n\nAtentamente,\nEl equipo de Quincena VE"
-    page = ('<!doctype html><html lang="es"><body style="font-family:Arial,Helvetica,sans-serif;color:#12211B;line-height:1.6">'
-            f'<p>Estimado/a <b>{html_escape(user.username)}</b>:</p><p>{html_escape(message)}<br>Fecha: {when} (hora de Caracas).</p>'
-            f'<p>{html_escape(tail)}</p><p>Atentamente,<br>El equipo de Quincena VE</p></body></html>')
+    page = email_layout(subject, f'<p style="margin:0 0 16px">Estimado/a <b>{html_escape(user.username)}</b>:</p>'
+                        f'<p style="margin:0 0 16px;padding:14px 16px;background:#BFF0D8;border-radius:12px;color:#0B3D2C">{html_escape(message)}<br>'
+                        f'<span style="font-size:14px">Fecha: {when} (hora de Caracas).</span></p>'
+                        f'<p style="margin:0 0 16px">{html_escape(tail)}</p><p style="margin:0">Atentamente,<br><b>El equipo de Quincena VE</b></p>', message)
     send_mail_async(user.email, subject, text, page)
+
+
+def email_layout(title: str, inner_html: str, preheader: str = "") -> str:
+    """Plantilla de todos los correos con la marca de Quincena VE: logo, franja con la bandera, verde de la marca y pie
+    con la dirección del sitio. Tablas y estilos en línea para que se vea igual en Gmail, Outlook e iCloud."""
+    origin = public_origin() if request else os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/")
+    logo = (f'<img src="{html_escape(origin, quote=True)}/static/icons/icon-192.png" width="44" height="44" alt="" '
+            'style="display:block;border:0;border-radius:12px">') if origin else ""
+    site = (f'<a href="{html_escape(origin, quote=True)}" style="color:#0B6B4D;font-weight:bold;text-decoration:none">'
+            f'{html_escape(origin.split("://")[-1])}</a> · ') if origin else ""
+    font = "'Figtree',Arial,Helvetica,sans-serif"
+    return (
+        '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<title>{html_escape(title)}</title>'
+        '<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700&family=Figtree:wght@400;600;700&display=swap" rel="stylesheet">'
+        f'</head><body style="margin:0;padding:0;background:#EEF5F0;font-family:{font};color:#12211B">'
+        f'<div style="display:none;max-height:0;overflow:hidden;opacity:0">{html_escape(preheader)}</div>'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#EEF5F0"><tr><td align="center" style="padding:28px 12px">'
+        '<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #D5E3DA;border-radius:16px;overflow:hidden">'
+        '<tr><td style="padding:0;font-size:0;line-height:0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+        '<td height="6" style="background:#FFCC00;width:33.33%"></td><td height="6" style="background:#00247D;width:33.34%"></td>'
+        '<td height="6" style="background:#CF142B;width:33.33%"></td></tr></table></td></tr>'
+        '<tr><td style="padding:22px 28px 18px;border-bottom:1px solid #E3ECE6"><table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="padding-right:{12 if logo else 0}px">{logo}</td>'
+        "<td style=\"font-family:'Bricolage Grotesque',Arial,Helvetica,sans-serif;font-size:22px;font-weight:bold;color:#0B6B4D\">Quincena VE 🇻🇪"
+        f'<div style="font-family:{font};font-size:13px;font-weight:normal;color:#46564E">Tus gastos en dólares y bolívares</div></td>'
+        '</tr></table></td></tr>'
+        f'<tr><td style="padding:28px;font-size:16px;line-height:1.6">{inner_html}</td></tr>'
+        '<tr><td style="padding:18px 28px;background:#F5FAF7;border-top:1px solid #E3ECE6;font-size:12px;line-height:1.6;color:#46564E">'
+        'Por su seguridad, Quincena VE nunca le solicitará su contraseña por correo electrónico ni por teléfono. '
+        'Este es un mensaje automático; por favor, no responda a este correo.<br>'
+        f'{site}Hecho en Venezuela por Gigadevs</td></tr>'
+        '</table></td></tr></table></body></html>'
+    )
+
+
+def email_button(link: str, label: str) -> str:
+    return (f'<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:4px auto 24px"><tr>'
+            f'<td style="background:#0B6B4D;border-radius:12px"><a href="{html_escape(link, quote=True)}" '
+            f'style="display:inline-block;padding:14px 30px;color:#ffffff;font-weight:bold;font-size:16px;text-decoration:none">{html_escape(label)}</a></td></tr></table>')
 
 
 def reset_email(username: str, link: str, validity: str = "60 minutos", intro: str = "Hemos recibido una solicitud para restablecer la contraseña de su cuenta en Quincena VE.", cta: str = "Restablecer contraseña", ignore: str = "Si usted no realizó esta solicitud, puede ignorar este mensaje; su contraseña actual no será modificada.") -> tuple[str, str]:
@@ -1590,22 +1631,16 @@ def reset_email(username: str, link: str, validity: str = "60 minutos", intro: s
         "Atentamente,\nEl equipo de Quincena VE"
     )
     name, url = html_escape(username), html_escape(link, quote=True)
-    page = (
-        '<!doctype html><html lang="es"><body style="margin:0;padding:24px;background:#F3F6F2;font-family:Arial,Helvetica,sans-serif;color:#12211B">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">'
-        '<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #D5DDD7;border-radius:12px;overflow:hidden">'
-        '<tr><td style="background:#0B6B4D;padding:20px 28px;color:#ffffff;font-size:22px;font-weight:bold">Quincena VE 🇻🇪</td></tr>'
-        '<tr><td style="padding:28px;font-size:16px;line-height:1.6">'
+    inner = (
         f'<p style="margin:0 0 16px">Estimado/a <b>{name}</b>:</p>'
         f'<p style="margin:0 0 16px">{html_escape(intro)}</p>'
         f'<p style="margin:0 0 24px">Para continuar, presione el siguiente botón. El enlace tiene una validez de <b>{validity}</b> y solo podrá utilizarse una vez.</p>'
-        f'<p style="margin:0 0 24px;text-align:center"><a href="{url}" style="display:inline-block;background:#0B6B4D;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:10px">{cta}</a></p>'
-        f'<p style="margin:0 0 16px;font-size:14px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all">{url}</span></p>'
+        + email_button(link, cta) +
+        f'<p style="margin:0 0 16px;padding:12px 14px;background:#F5FAF7;border-radius:10px;font-size:13px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all;color:#0B6B4D">{url}</span></p>'
         f'<p style="margin:0 0 16px">{html_escape(ignore)}</p>'
-        '<p style="margin:0">Atentamente,<br>El equipo de Quincena VE</p></td></tr>'
-        '<tr><td style="padding:16px 28px;background:#F3F6F2;font-size:13px;color:#46564E">Por su seguridad, Quincena VE nunca le solicitará su contraseña por correo electrónico ni por teléfono. Este es un mensaje automático; por favor, no responda a este correo.</td></tr>'
-        '</table></td></tr></table></body></html>'
+        '<p style="margin:0">Atentamente,<br><b>El equipo de Quincena VE</b></p>'
     )
+    page = email_layout(cta, inner, intro)
     return text, page
 
 
@@ -1938,10 +1973,12 @@ def mail_test():
               "mail_from": f"{name} <{addr}>" if addr else None, "app_public_origin": os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or None,
               "problem": mail_problem()}
     subject, body = "Correo de prueba – Quincena VE", "Si recibe este mensaje, el envío de correos de Quincena VE funciona."
+    page = email_layout(subject, '<p style="margin:0 0 16px"><b>¡Funciona!</b></p><p style="margin:0">Si recibe este mensaje, '
+                        'el envío de correos de Quincena VE está bien configurado.</p>', body)
     if api_key:
-        sent, detail = brevo_send(api_key, to, subject, body)
+        sent, detail = brevo_send(api_key, to, subject, body, page)
     else:
-        sent = send_mail(to, subject, body)
+        sent = send_mail(to, subject, body, page)
         detail = "Enviado por SMTP." if sent else "No se pudo enviar por SMTP (revisa SMTP_USER y SMTP_PASSWORD)."
     if not sent:
         app.logger.error("Correo de prueba no enviado: %s", detail)
