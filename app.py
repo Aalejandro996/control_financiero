@@ -1483,28 +1483,55 @@ def mail_configured() -> bool:
     return bool(os.getenv("BREVO_API_KEY", "").strip() or (os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD")))
 
 
+def mail_problem() -> str | None:
+    """Qué falta para que salgan los correos con enlace (verificación y recuperación), o None si está todo."""
+    if not mail_configured():
+        return "falta BREVO_API_KEY en Render"
+    if os.getenv("BREVO_API_KEY", "").strip() and not parseaddr(os.getenv("MAIL_FROM", ""))[1]:
+        return "falta MAIL_FROM (remitente verificado en Brevo, p. ej. Quincena VE <tu@correo.com>)"
+    if not os.getenv("APP_PUBLIC_ORIGIN", "").strip() and os.getenv("RENDER"):
+        return "falta APP_PUBLIC_ORIGIN (p. ej. https://control-financiero-wrm5.onrender.com)"
+    return None
+
+
+def brevo_send(api_key: str, to: str, subject: str, body: str, html_body: str | None = None) -> tuple[bool, str]:
+    """Correo transaccional por la API HTTPS de Brevo (POST /v3/smtp/email). Devuelve (enviado, detalle)."""
+    name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
+    if not addr:
+        return False, "MAIL_FROM vacío o inválido: debe ser un remitente verificado en Brevo, p. ej. Quincena VE <tu@correo.com>."
+    payload = {"sender": {"name": name or "Quincena VE", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
+    if html_body:
+        payload["htmlContent"] = html_body
+    req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode("utf-8"), method="POST",
+                                 headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            try:
+                answer = json.loads(response.read() or b"{}")
+            except Exception:
+                answer = {}
+            return 200 <= response.status < 300, f"HTTP {response.status}, messageId {answer.get('messageId', '?')}"
+    except urllib.error.HTTPError as error:
+        try:
+            answer = json.loads(error.read() or b"{}")
+        except Exception:
+            answer = {}
+        # Solo el código y el mensaje de Brevo (p. ej. «unauthorized: Key not found»), nunca la clave.
+        detail = f"HTTP {error.code}: {str(answer.get('code', ''))[:60]}: {str(answer.get('message', ''))[:300]}"
+        return False, detail.replace(api_key, "***") if api_key else detail
+    except Exception as error:
+        return False, f"No se pudo contactar a Brevo ({type(error).__name__})."
+
+
 def send_mail(to: str, subject: str, body: str, html_body: str | None = None) -> bool:
     """Envía un correo. Prefiere la API HTTPS de Brevo (funciona en el plan gratis de Render, que bloquea SMTP);
     si no hay BREVO_API_KEY, usa SMTP de Gmail con contraseña de aplicación."""
     api_key = os.getenv("BREVO_API_KEY", "").strip()
     if api_key:
-        name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
-        if not addr:
-            app.logger.error("Correo no enviado: MAIL_FROM debe ser un remitente verificado en Brevo, p. ej. Quincena VE <tu@correo.com>.")
-            return False
-        payload = {"sender": {"name": name or "Quincena VE", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
-        if html_body:
-            payload["htmlContent"] = html_body
-        req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode("utf-8"), method="POST",
-                                     headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return 200 <= response.status < 300
-        except urllib.error.HTTPError as error:
-            app.logger.warning("Brevo rechazó el correo (HTTP %s).", error.code)  # sin el cuerpo: podría traer datos del destinatario
-        except Exception:
-            app.logger.warning("No se pudo contactar a Brevo para enviar el correo.")
-        return False
+        sent, detail = brevo_send(api_key, to, subject, body, html_body)
+        if not sent:
+            app.logger.error("Brevo no envió el correo «%s»: %s", subject, detail)
+        return sent
     smtp_user, smtp_password = os.getenv("SMTP_USER", ""), os.getenv("SMTP_PASSWORD", "")
     if not smtp_user or not smtp_password:
         return False
@@ -1632,6 +1659,7 @@ def send_verification(user: "User") -> bool:
     db.session.commit()
     origin = public_origin()
     if not origin or not mail_configured():
+        app.logger.error("Correo de verificación no enviado: %s.", mail_problem() or "sin dirección pública")
         return False
     # El código va tras "#": el navegador nunca lo envía al servidor, así no queda en registros ni en cabeceras Referer.
     text_body, html_body = reset_email(user.username, f"{origin}/app#verify={token}", "24 horas",
@@ -1723,7 +1751,7 @@ def forgot_password():
             send_mail_async(email, "Restablecimiento de contraseña – Quincena VE", text_body, html_body)
             audit("password_reset_requested", "Enlace solicitado", user.id)
         else:
-            app.logger.error("Recuperación de clave sin correo configurado (BREVO_API_KEY/MAIL_FROM/APP_PUBLIC_ORIGIN).")
+            app.logger.error("Recuperación de clave no enviada: %s.", mail_problem() or "sin dirección pública")
             audit("password_reset_requested", "No se pudo enviar: el correo no está configurado", user.id)
     return jsonify(ok=True)  # misma respuesta exista o no el correo
 
@@ -1894,6 +1922,31 @@ def signups_by_source():
             row["last_7_days"] += 1
     by_source = sorted(rows.values(), key=lambda r: (-r["total"], r["source"]))
     return jsonify(total=sum(r["total"] for r in by_source), by_source=by_source)
+
+
+@app.post("/api/mail-test")
+@require_auth(admin=True)
+@limiter.limit("10 per hour")
+def mail_test():
+    """Solo administrador: envía un correo de prueba y devuelve la configuración detectada y la respuesta de Brevo."""
+    to = str((request.get_json(silent=True) or {}).get("to") or g.user.email or "").strip().lower()
+    if not EMAIL_RE.match(to):
+        return jsonify(error="Indica un correo válido en «to»."), 400
+    name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
+    config = {"brevo_api_key": bool(api_key), "smtp": bool(os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD")),
+              "mail_from": f"{name} <{addr}>" if addr else None, "app_public_origin": os.getenv("APP_PUBLIC_ORIGIN", "").rstrip("/") or None,
+              "problem": mail_problem()}
+    subject, body = "Correo de prueba – Quincena VE", "Si recibe este mensaje, el envío de correos de Quincena VE funciona."
+    if api_key:
+        sent, detail = brevo_send(api_key, to, subject, body)
+    else:
+        sent = send_mail(to, subject, body)
+        detail = "Enviado por SMTP." if sent else "No se pudo enviar por SMTP (revisa SMTP_USER y SMTP_PASSWORD)."
+    if not sent:
+        app.logger.error("Correo de prueba no enviado: %s", detail)
+    audit("mail_test", f"Correo de prueba {'enviado' if sent else 'fallido'}", g.user.id)
+    return jsonify(sent=sent, detail=detail, config=config), (200 if sent else 502)
 
 
 @app.post("/api/users")

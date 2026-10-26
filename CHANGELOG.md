@@ -8,6 +8,18 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · diagnóstico de correos] — 26 oct 2026
+
+### Agregado
+- **Servidor — `POST /api/mail-test`** (solo administrador): envía un correo de prueba a `{"to": "correo"}` (o al
+  correo del administrador) y devuelve la configuración detectada (`BREVO_API_KEY` sí o no, `MAIL_FROM`,
+  `APP_PUBLIC_ORIGIN`, qué falta) y la respuesta exacta de Brevo. Pruebas: `tests/mail_test.py`.
+
+### Corregido
+- **Correos que no salían sin dejar rastro:** ahora el registro de Render dice por qué no se envió un correo de
+  verificación o de recuperación (falta `BREVO_API_KEY`, `MAIL_FROM` o `APP_PUBLIC_ORIGIN`) y, si Brevo lo rechaza,
+  su código y mensaje (p. ej. «unauthorized: Key not found» o un remitente no verificado). La clave nunca se registra.
+
 ## [Sin publicar · actualización obligatoria] — 25 oct 2026
 
 ### Agregado
