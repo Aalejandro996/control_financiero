@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -63,6 +64,7 @@ def database_url() -> str:
 
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+app.logger.setLevel(logging.INFO)  # en Render también se ven los avisos informativos (p. ej. de dónde salió la tasa)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config.update(
     SECRET_KEY=os.getenv("APP_SECRET_KEY") or secrets.token_hex(32),
@@ -2079,35 +2081,84 @@ def _http_json(url: str):
         return json.loads(response.read().decode("utf-8"))
 
 
+def _http_text(url: str) -> str:
+    request_obj = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Quincena VE)"})
+    with urllib.request.urlopen(request_obj, timeout=8) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def _day_of(value) -> str:
+    """Fecha (AAAA-MM-DD) de una marca de tiempo ISO, o "" si no se entiende."""
+    match = re.match(r"\s*(\d{4}-\d{2}-\d{2})", str(value or ""))
+    return match.group(1) if match else ""
+
+
+def _bcv_official() -> tuple[float, str]:
+    """Tasa oficial publicada en bcv.org.ve: (Bs. por USD, fecha valor ISO)."""
+    page = _http_text("https://www.bcv.org.ve/")
+    found = re.search(r'id="dolar".*?<strong>\s*([\d.,]+)\s*</strong>', page, re.S)
+    if not found:
+        raise ValueError("no encontré la tasa del dólar en la página del BCV")
+    value = float(found.group(1).replace(".", "").replace(",", "."))
+    when = re.search(r'Fecha Valor:.*?content="([^"]+)"', page, re.S)
+    return value, (when.group(1) if when else "")
+
+
+def _dolarapi(country: str) -> tuple[list, dict, float]:
+    rows = _http_json(f"https://{country.lower()}.dolarapi.com/v1/dolares")
+    row = next((item for item in rows if item.get("fuente") == "oficial"), rows[0])
+    return rows, row, float(row.get("promedio") if row.get("promedio") is not None else row.get("venta"))
+
+
 def fetch_rate(country: str = DEFAULT_COUNTRY) -> dict:
     """Tasa oficial de la moneda local por 1 USD, con caché de 30 minutos y último valor conocido.
 
-    Venezuela (oficial y paralelo) y Argentina (oficial) usan dolarapi; los demás países, tipos de cambio diarios de open.er-api.com."""
+    Venezuela: la del BCV (bcv.org.ve) y la de dolarapi, y gana la de fecha más reciente (a igual fecha, el BCV), así
+    una fuente caída o atrasada no deja la tasa vieja. Paralelo de Venezuela y oficial de Argentina: dolarapi. Los demás
+    países: tipos de cambio diarios de open.er-api.com. Cada consulta queda en el registro de Render."""
     country = clean_country(country)
-    cache = _RATE_CACHE.setdefault(country, {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None})
+    cache = _RATE_CACHE.setdefault(country, {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None, "source": None})
     now = time.time()
     if cache["rate"] and now - cache["fetched"] < 1800:
         return cache
     cache["fetched"] = now - 1500 if cache["rate"] else 0.0  # ante un fallo, se reintenta en ~5 minutos
-    try:
-        stamp = datetime.now(timezone.utc).isoformat()
-        if country in ("VE", "AR"):
-            rows = _http_json(f"https://{country.lower()}.dolarapi.com/v1/dolares")
-            row = next((item for item in rows if item.get("fuente") == "oficial"), rows[0])
-            value = float(row.get("promedio") if row.get("promedio") is not None else row.get("venta"))
-            if math.isfinite(value) and 0 < value < 1_000_000:
-                cache.update(rate=value, updated=row.get("fechaActualizacion") or stamp, fetched=now)
+    stamp = datetime.now(timezone.utc).isoformat()
+    ok = lambda value: value is not None and math.isfinite(value) and 0 < value < 1_000_000
+    if country in ("VE", "AR"):
+        candidates, notes = [], []
+        try:
+            rows, row, value = _dolarapi(country)
+            notes.append(f"dolarapi {value} ({row.get('fechaActualizacion') or 'sin fecha'})")
+            if ok(value):
+                candidates.append((_day_of(row.get("fechaActualizacion")), 0, value, row.get("fechaActualizacion") or stamp, "dolarapi"))
             market = next((item for item in rows if item.get("fuente") == "paralelo"), None) if country == "VE" else None
             market_value = _rate_or_none(market.get("promedio") if market and market.get("promedio") is not None else (market or {}).get("venta"))
             if market_value:
                 cache.update(parallel=market_value, parallel_updated=market.get("fechaActualizacion") or stamp)
+        except Exception as error:
+            notes.append(f"dolarapi falló ({type(error).__name__}: {str(error)[:120]})")
+        if country == "VE":
+            try:
+                value, when = _bcv_official()
+                notes.append(f"BCV {value} (fecha valor {when or 'sin fecha'})")
+                if ok(value):
+                    candidates.append((_day_of(when), 1, value, when or stamp, "bcv"))
+            except Exception as error:
+                notes.append(f"BCV falló ({type(error).__name__}: {str(error)[:120]})")
+        if candidates:
+            day, _, value, updated, source = max(candidates)
+            cache.update(rate=value, updated=updated, fetched=now, source=source)
+            app.logger.info("Tasa %s: uso %s %s. Fuentes: %s.", country, source, value, "; ".join(notes))
         else:
-            data = _http_json("https://open.er-api.com/v6/latest/USD")
-            value = float((data.get("rates") or {}).get(COUNTRIES[country]["cur"]))
-            if math.isfinite(value) and 0 < value < 1_000_000:
-                cache.update(rate=value, updated=stamp, fetched=now)
-    except Exception:
-        pass  # se conserva el último valor conocido
+            app.logger.error("Tasa %s sin actualizar, se mantiene %s. Fuentes: %s.", country, cache["rate"], "; ".join(notes))
+        return cache
+    try:
+        data = _http_json("https://open.er-api.com/v6/latest/USD")
+        value = float((data.get("rates") or {}).get(COUNTRIES[country]["cur"]))
+        if ok(value):
+            cache.update(rate=value, updated=stamp, fetched=now, source="open.er-api")
+    except Exception as error:
+        app.logger.error("Tasa %s sin actualizar, se mantiene %s (%s: %s).", country, cache["rate"], type(error).__name__, str(error)[:120])
     return cache
 
 
@@ -2127,7 +2178,8 @@ def get_rate():
     cached = fetch_rate(country)
     if not cached["rate"]:
         return jsonify(error=f"No pudimos obtener el tipo de cambio ({COUNTRIES[country]['official']}) ahora. Inténtalo en unos minutos."), 503
-    return jsonify(country=country, rate=cached["rate"], updated_at=cached["updated"], parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
+    return jsonify(country=country, rate=cached["rate"], updated_at=cached["updated"], source=cached.get("source"),
+                   parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
 
 
 @app.delete("/api/account")

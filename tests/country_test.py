@@ -34,6 +34,7 @@ def fake_http(url):
 
 
 A.fetch_rate.__globals__["_http_json"] = fake_http
+A.fetch_rate.__globals__["_http_text"] = lambda url: (_ for _ in ()).throw(OSError("sin red en las pruebas"))
 cl = A.app.test_client()
 H = {"X-Forwarded-For": "198.51.100.7"}
 cl.post("/api/setup", json={"bootstrap_token": "b" * 32, "username": "admin", "password": "Zeta-Roble-9182x"}, headers=H)

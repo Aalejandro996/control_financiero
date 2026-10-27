@@ -8,6 +8,15 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · tasa del dólar más confiable] — 27 oct 2026
+
+### Corregido
+- **La tasa BCV podía quedarse vieja sin aviso.** El servidor solo la tomaba de dolarapi y, si fallaba o venía
+  atrasada, lo callaba. Ahora consulta también la página del BCV (bcv.org.ve) y usa la de **fecha más reciente** (a
+  igual fecha, la del BCV). El paralelo sigue saliendo de dolarapi.
+- Cada consulta queda en el registro de Render: qué dio cada fuente, cuál se usó y, si falló, por qué.
+- `/api/rate` dice de qué fuente salió la tasa (`source`). Pruebas: `tests/rate_test.py`.
+
 ## [Sin publicar · Más, más simple] — 26 oct 2026
 
 ### Cambiado
