@@ -138,6 +138,9 @@ class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHos
     var deudasSub by mutableStateOf("debo")
     var calYm by mutableStateOf(java.time.YearMonth.now())
     var calDay by mutableIntStateOf(0)
+    var bizSub by mutableStateOf("hoy")
+    var cart by mutableStateOf(mapOf<String, Double>())
+    var sellersVer by mutableIntStateOf(0)
 
     val fmt: Fmt get() = Fmt(hide, repo.data.str("currency") == "BS", rateOf(repo.data))
 
@@ -181,7 +184,7 @@ fun App(
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val st = remember { AppState(repo, scope, snack) }
-    LaunchedEffect(resumes) { st.update = repo.checkUpdate() }
+    LaunchedEffect(resumes) { st.update = repo.checkUpdate(); if (repo.loggedIn) repo.refreshAccount() }
     LaunchedEffect(link) {
         if (link == null || link.first != "verify") return@LaunchedEffect
         onLink()
@@ -199,6 +202,7 @@ fun App(
                 lock.locked -> LockScreen(unlock)
                 link != null && link.first == "reset" -> ResetScreen(st, link.second, onLink)
                 !repo.loggedIn -> AuthScreen(st)
+                repo.seller -> SellerScreen(st, resumes)
                 else -> Main(st, resumes, shared, onShared, startAction, onStartAction)
             }
             SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 150.dp, start = 16.dp, end = 16.dp)) {
@@ -274,7 +278,7 @@ fun Main(
         bottomBar = { NavBar(st) },
         floatingActionButton = {
             Box(
-                Modifier.size(56.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(p.g).clickable { st.open("gasto") },
+                Modifier.size(56.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(p.g).clickable { st.open(if (st.tab == "negocio") "bizventa" else "gasto") },
                 contentAlignment = Alignment.Center,
             ) { Text("+", color = Color.White, fontSize = 30.sp) }
         },
@@ -293,6 +297,7 @@ fun Main(
                         "movimientos" -> Movimientos(st)
                         "deudas" -> Deudas(st)
                         "pagos" -> Pagos(st)
+                        "negocio" -> if (bizOn(st.repo.data)) Negocio(st) else Inicio(st)
                         else -> Mas(st)
                     }
                 }
@@ -306,21 +311,24 @@ fun Main(
 @Composable
 fun NavBar(st: AppState) {
     val p = pal
+    // Con el modo Negocio hay 6 pestañas: Negocio va después de Inicio y las etiquetas se achican para caber.
+    val tabs = if (bizOn(st.repo.data)) TABS.take(1) + Triple("negocio", "Negocio", IconNegocio) + TABS.drop(1) else TABS
+    val six = tabs.size > 5
     Column(Modifier.fillMaxWidth().background(p.card)) {
         HorizontalDivider(color = p.line, thickness = 1.dp)
         Row(
             Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
-            TABS.forEach { (k, label, icon) ->
+            tabs.forEach { (k, label, icon) ->
                 val on = st.tab == k
                 val c = if (on) p.g else p.mut
                 Column(
-                    Modifier.widthIn(min = 64.dp).heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp)).clickable { st.go(k) },
+                    (if (six) Modifier.weight(1f) else Modifier.widthIn(min = 64.dp)).heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp)).clickable { st.go(k) },
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
                 ) {
                     Icon(icon, null, Modifier.size(24.dp), tint = c)
-                    Text(label, fontSize = 12.sp, color = c, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
+                    Text(label, fontSize = if (six) 10.sp else 12.sp, color = c, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, softWrap = false)
                 }
             }
         }

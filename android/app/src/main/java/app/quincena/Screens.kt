@@ -567,6 +567,7 @@ fun Mas(st: AppState) {
     }
 
     Head(st)
+    BizMasCard(st)
     PaisMasCard(st)
     QCard {
         B("Avisos")

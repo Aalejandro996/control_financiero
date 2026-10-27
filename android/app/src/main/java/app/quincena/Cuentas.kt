@@ -41,7 +41,7 @@ import kotlin.math.min
 
 const val TERMS_VERSION = "2026-10-23"
 val ACC_KINDS = linkedMapOf("banco" to "Banco", "efectivo" to "Efectivo", "digital" to "Digital (Zelle, PayPal…)", "cripto" to "Cripto (USDT…)")
-val KIND_IN = mapOf("sueldo" to "Cobro", "extra" to "Ingreso extra", "cobro" to "Te devolvieron")
+val KIND_IN = mapOf("sueldo" to "Cobro", "extra" to "Ingreso extra", "cobro" to "Te devolvieron", "negocio" to "Del negocio")
 
 fun copyright(): String {
     val y = LocalDate.now().year
@@ -87,7 +87,7 @@ fun accBalance(d: JsonObject, a: JsonObject): Double {
         if (t.str("fromId") == a.id) b -= t.num("amountFrom")
         if (t.str("toId") == a.id) b += t.num("amountTo")
     }
-    return b
+    return b + bizAccFlow(d, a)
 }
 
 fun totalUsd(d: JsonObject) = accounts(d).sumOf { usdOf(d, accBalance(d, it), it.str("currency")) }

@@ -36,6 +36,32 @@ class Repo(ctx: Context) {
         private set
     var username by mutableStateOf(store.get("username") ?: "")
         private set
+    /** Negocio Plus ("plus" o "free") y cuenta de vendedor (solo registra ventas del negocio de su dueño). */
+    var plan by mutableStateOf(store.get("plan") ?: "free")
+        private set
+    var seller by mutableStateOf(store.get("seller") == "1")
+        private set
+    var business by mutableStateOf(store.get("business") ?: "")
+        private set
+    val plus get() = plan == "plus"
+
+    private fun adoptUser(u: JsonObject?) {
+        if (u == null) return
+        plan = u.str("plan") ?: "free"; seller = u.bool("seller") == true; business = u.str("business") ?: ""
+        store.put("plan", plan); store.put("seller", if (seller) "1" else null); store.put("business", business)
+    }
+
+    /** Vuelve a leer el plan y si es vendedor (el administrador pudo activar el Plus). */
+    suspend fun refreshAccount() {
+        val r = runCatching { api.call("GET", "/api/status") }.getOrNull() ?: return
+        if (r.bool("authenticated") == true) adoptUser(r["user"] as? JsonObject)
+    }
+
+    suspend fun sellers(): JsonObject = api.call("GET", "/api/biz/sellers")
+    suspend fun createSeller(user: String, pass: String) { api.call("POST", "/api/biz/sellers", buildJsonObject { put("username", user); put("password", pass) }) }
+    suspend fun updateSeller(id: Int, body: JsonObject) { api.call("PATCH", "/api/biz/sellers/$id", body) }
+    suspend fun sellerHome(): JsonObject = api.call("GET", "/api/biz/seller")
+    suspend fun sellerSale(sale: JsonObject): JsonObject = api.call("POST", "/api/biz/seller/sale", sale)["sale"]!!.jsonObject
 
     private fun persist() { store.put("data", data.toString()); store.put("base", base.toString()); store.put("rev", rev.toString()) }
 
@@ -59,6 +85,7 @@ class Repo(ctx: Context) {
         api.token = r["token"]!!.jsonPrimitive.content
         username = r["user"]?.jsonObject?.str("username") ?: user.trim().lowercase()
         store.put("username", username)
+        adoptUser(r["user"] as? JsonObject)
         try { adopt(api.call("GET", "/api/state")) } catch (e: Exception) { api.token = null; throw e }
         loggedIn = true
         sync.withLock { if (runMaintenance()) guard { push() }; Unit }
@@ -118,8 +145,8 @@ class Repo(ctx: Context) {
 
     private fun clearLocal() {
         setToken(null)
-        listOf("data", "base", "rev", "username").forEach { store.put(it, null) }
-        data = JsonObject(emptyMap()); base = data; rev = 0; username = ""
+        listOf("data", "base", "rev", "username", "plan", "seller", "business").forEach { store.put(it, null) }
+        data = JsonObject(emptyMap()); base = data; rev = 0; username = ""; plan = "free"; seller = false; business = ""
     }
 
     // ---------- Sincronización ----------

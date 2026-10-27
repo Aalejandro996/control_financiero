@@ -292,6 +292,7 @@ private fun strokeIcon(vararg paths: String): ImageVector {
 }
 
 val IconInicio = strokeIcon("M4 11l8-7 8 7v9H4z")
+val IconNegocio = strokeIcon("M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M9 20v-6h6v6")
 val IconMov = strokeIcon("M4 7h16M4 12h16M4 17h10")
 val IconDeudas = strokeIcon("M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V8a2 2 0 0 1 2 -2z", "M3 10h18")
 val IconPagos = strokeIcon("M6 5h12a3 3 0 0 1 3 3v9a3 3 0 0 1 -3 3H6a3 3 0 0 1 -3 -3V8a3 3 0 0 1 3 -3z", "M3 10h18M8 3v4M16 3v4")

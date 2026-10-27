@@ -304,6 +304,18 @@ object PaymentParser {
     private val usd = Regex("(?i)(?:\\$|usd)\\s*([0-9][0-9.,]*)")
     private val merchant = Regex("(?:\\ba|\\ben|\\bpara)\\s+([A-ZÁÉÍÓÚÑ0-9][\\wÁÉÍÓÚÑáéíóúñ.&' -]{2,28})")
 
+    private val received = Regex("(?i)(recibiste|has\\s+recibido|te\\s+(envi|pag|transfiri|abon)|abono\\s+a\\s+tu|cr[eé]dito\\s+a|dep[oó]sito)")
+    private val secret = Regex("(?i)(c[oó]digo|clave|contrase|otp|token|verificaci)")
+
+    /** Pago que te hicieron (para registrar una venta del negocio): (monto, moneda), o null. */
+    fun parseIncoming(text: String): Pair<Double, String>? {
+        if (!received.containsMatchIn(text) || secret.containsMatchIn(text)) return null
+        val mBs = bs.find(text)
+        val (cur, raw) = if (mBs != null) "BS" to mBs.groupValues[1] else (usd.find(text)?.let { "USD" to it.groupValues[1] } ?: return null)
+        val amount = parseMoney(raw.trimEnd('.', ',')) ?: return null
+        return if (amount <= 0 || amount > 1e10) null else amount to cur
+    }
+
     /** [strict] = exige palabras de pago. Con mensajes compartidos o pegados basta con encontrar un monto. */
     fun parse(text: String, strict: Boolean = true): Det? {
         if ((strict && !outgoing.containsMatchIn(text)) || incoming.containsMatchIn(text)) return null
@@ -359,6 +371,10 @@ fun DetectadosCard(st: AppState) {
 fun handleBankText(st: AppState, ctx: Context, text: String?) {
     val t = text?.trim().orEmpty()
     if (t.isEmpty()) { st.toast("No hay ningún mensaje copiado."); return }
+    // Con el modo Negocio, un pago que te hicieron se anota como venta.
+    if (bizOn(st.repo.data)) PaymentParser.parseIncoming(t.take(600))?.let { (amount, cur) ->
+        st.go("negocio"); st.open("bizventa", "sms:$amount:$cur"); return
+    }
     val d = PaymentParser.parse(t.take(600), strict = false)
     if (d == null) { st.toast("No encontramos un monto en ese mensaje. Puedes registrarlo a mano con +."); return }
     val id = "s" + System.currentTimeMillis()

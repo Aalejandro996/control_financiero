@@ -59,6 +59,15 @@ fun SheetHost(st: AppState) {
                     "clave" -> ClaveForm(st)
                     "borrar" -> BorrarForm(st)
                     "legal" -> LegalSheet(st)
+                    "bizconf" -> BizConfForm(st)
+                    "bizventa" -> VentaForm(st, s.arg)
+                    "bizgasto" -> BizGastoForm(st)
+                    "bizretiro" -> BizRetiroForm(st)
+                    "bizcierre" -> BizCierreForm(st)
+                    "bizabono" -> BizAbonoForm(st, s.arg!!)
+                    "bizprod" -> BizProdForm(st, s.arg)
+                    "bizvend" -> BizVendForm(st)
+                    "bizvpass" -> BizVPassForm(st, s.arg!!)
                 }
             }
         }

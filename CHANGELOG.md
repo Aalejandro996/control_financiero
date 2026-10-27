@@ -8,6 +8,28 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · Quincena VE para tu negocio] — 27 oct 2026
+
+### Agregado
+- **Fase 1 · Negocio (gratis, web y app):** se activa en Más. Pestaña Negocio con ventas en $ y Bs. a la tasa del
+  día, por medio de pago (pago móvil, efectivo, Zelle, Binance, punto…); fiado con abonos y recordatorio por WhatsApp;
+  gastos del negocio (mercancía, alquiler, servicios, sueldos…) aparte de los personales; cierre de caja con el
+  efectivo esperado y contado; "Me pago a mí" (sale del negocio y entra como ingreso personal); ganancia del mes.
+  En Android, compartir el SMS de un pago móvil **recibido** abre la venta ya escrita.
+- **Fase 2 · Negocio Plus:** catálogo de productos con precio en $ (se convierte a Bs. solo) e inventario que baja
+  con cada venta; recibo para WhatsApp que dice "No es factura fiscal"; Excel del mes para el contador (CSV).
+  El plan lo activa un administrador: `PATCH /api/users/<id>` con `{"plan": "plus", "days": 30}` (0 = sin vencimiento).
+- **Fase 3 · Equipo y crecimiento:** hasta 5 vendedores por negocio (Plus) con su propio usuario: solo registran
+  ventas y la dueña las ve con su nombre. Tarjeta para contratar a Gigadevs. La compilación deja además el AAB para
+  Google Play (`android/GOOGLE_PLAY.md`).
+- Servidor: colecciones `business`, `sales`, `bizPayments`, `bizExpenses`, `products`, `cashClosings`; columnas
+  `user.plan`, `user.plan_until`, `user.owner_id`; rutas `/api/biz/sellers` y `/api/biz/seller`. Pruebas:
+  `tests/negocio_test.py` (38) y `tests/negocio_ui_test.py` (30, en navegador).
+
+### Corregido
+- **Web:** un cambio hecho mientras se guardaba otro (por ejemplo, la tasa que llega justo después de crear la
+  cuenta) se perdía al recibir la respuesta del servidor. Ahora se conserva y se mezcla en el siguiente guardado.
+
 ## [Sin publicar · tasa del dólar más confiable] — 27 oct 2026
 
 ### Corregido
