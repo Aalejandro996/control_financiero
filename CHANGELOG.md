@@ -18,7 +18,8 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
   En Android, compartir el SMS de un pago móvil **recibido** abre la venta ya escrita.
 - **Fase 2 · Negocio Plus:** catálogo de productos con precio en $ (se convierte a Bs. solo) e inventario que baja
   con cada venta; recibo para WhatsApp que dice "No es factura fiscal"; Excel del mes para el contador (CSV).
-  El plan lo activa un administrador: `PATCH /api/users/<id>` con `{"plan": "plus", "days": 30}` (0 = sin vencimiento).
+  El plan lo activa un administrador desde Más › Administrar Negocio Plus (o `PATCH /api/users/<id>` con
+  `{"plan": "plus", "days": 30}`; 0 = sin vencimiento).
 - **Fase 3 · Equipo y crecimiento:** hasta 5 vendedores por negocio (Plus) con su propio usuario: solo registran
   ventas y la dueña las ve con su nombre. Tarjeta para contratar a Gigadevs. La compilación deja además el AAB para
   Google Play (`android/GOOGLE_PLAY.md`).

@@ -128,13 +128,22 @@ try:
         print("== Negocio Plus ==")
         page.click("[data-biz='sub:productos']"); page.wait_for_timeout(200)
         check("sin Plus, Productos muestra cómo pedirlo", "Pedir Negocio Plus por WhatsApp" in text(page))
-        adm = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
-        r = json.loads(adm.open(urllib.request.Request(f"http://127.0.0.1:{PORT}/api/login", method="POST", headers={"Content-Type": "application/json"},
-                                data=json.dumps({"username": "admin", "password": "Zeta-Roble-9182x"}).encode())).read())
-        users = json.loads(adm.open(f"http://127.0.0.1:{PORT}/api/users").read())["users"]
-        ana_id = next(u["id"] for u in users if u["username"] == "ana")
-        adm.open(urllib.request.Request(f"http://127.0.0.1:{PORT}/api/users/{ana_id}", method="PATCH", headers={"Content-Type": "application/json", "X-CSRF-Token": r["csrf_token"]},
-                                        data=json.dumps({"plan": "plus"}).encode()))
+        actx = b.new_context(base_url=f"http://127.0.0.1:{PORT}", timezone_id="America/Caracas", locale="es-VE")
+        actx.add_init_script("try{localStorage.setItem('qck','1');localStorage.setItem('qapk','1')}catch(e){}")
+        ap = actx.new_page(); ap.on("pageerror", lambda e: errors.append(str(e))); ap.route("**/api/rate*", fake_rate)
+        ap.goto("/app"); ap.wait_for_timeout(800)
+        ap.fill("input[name=username]", "admin"); ap.fill("input[name=password]", "Zeta-Roble-9182x"); ap.keyboard.press("Enter")
+        ap.wait_for_selector("nav [data-tab]"); ap.wait_for_timeout(600)
+        for t in ("Acepto", "Aceptar"):
+            if ap.get_by_role("button", name=t).count():
+                ap.get_by_role("button", name=t).first.click(); ap.wait_for_timeout(400)
+        ap.click("nav [data-tab=mas]"); ap.wait_for_timeout(300)
+        check("el administrador ve Administrar Negocio Plus en Más", "Administrar Negocio Plus" in text(ap))
+        ap.click("[data-sheet=bizadmin]"); ap.fill("#f-sheet [name=username]", "noexiste"); sheet_save(ap, "Aplicar")
+        check("con un usuario que no existe avisa", "No existe una cuenta" in text(ap))
+        ap.fill("#f-sheet [name=username]", "ana"); ap.fill("#f-sheet [name=days]", "30"); sheet_save(ap, "Aplicar")
+        check("activa Plus a ana por 30 días", "Plus activo para ana hasta" in text(ap), text(ap)[-200:])
+        actx.close()
         page.reload(); page.wait_for_selector("nav [data-tab]"); page.wait_for_timeout(800)
         page.click("nav [data-tab=negocio]"); page.click("[data-biz='sub:productos']"); page.wait_for_timeout(200)
         page.click("[data-biz='prod:']"); page.fill("#f-sheet [name=name]", "Harina"); page.fill("#f-sheet [name=price]", "1,5"); page.fill("#f-sheet [name=cost]", "1")
