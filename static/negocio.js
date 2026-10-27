@@ -1,0 +1,169 @@
+// Quincena VE Negocio: ventas, fiado, gastos del negocio, cierre de caja y resultado del mes (fase 1);
+// productos, inventario, recibo y Excel para el contador (fase 2, Negocio Plus); vendedores y modo vendedor (fase 3).
+// El dinero del negocio va aparte: no entra en los gastos, el presupuesto ni la quincena personal.
+// Se carga antes del script principal: aquí solo se definen funciones; usan S, render, mutate, money… al llamarse.
+const BIZ_WA='584242588321';
+const METHODS={pago_movil:'Pago móvil',efectivo_bs:'Efectivo Bs.',efectivo_usd:'Efectivo $',zelle:'Zelle',binance:'Binance',punto:'Punto de venta',transferencia:'Transferencia',otro:'Otro'};
+const BIZ_CATS={mercancia:'Mercancía',alquiler:'Alquiler',servicios:'Servicios',sueldos:'Sueldos',transporte:'Transporte',impuestos:'Impuestos',otro:'Otro'};
+const BSUBS=[['hoy','Hoy'],['ventas','Ventas'],['fiado','Fiado'],['gastos','Gastos'],['mes','Mes'],['productos','Productos'],['equipo','Equipo']];
+const PLUS_SUBS=['productos','equipo'];
+
+function bizOn(){return !!(S.data&&S.data.business&&S.data.business.enabled)}
+function isPlus(){return !!(S.user&&S.user.plan==='plus')}
+function bizHandles(f){return f.id==='f-sell'||(f.id==='f-sheet'&&String(f.dataset.k||'').startsWith('biz'))}
+const bizUsd=x=>x.currency==='BS'?(+x.amount||0)/(Number(x.rateUsed)||rate()||1):(+x.amount||0);
+const bizToday=()=>ymd(new Date());
+const bizMonth=()=>ymd(new Date()).slice(0,7);
+const bizId=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const methodCur=m=>m==='efectivo_usd'||m==='zelle'||m==='binance'?'USD':'BS';
+function waLink(phone,text){let p=String(phone||'').replace(/\D/g,'');if(p.startsWith('0'))p='58'+p.slice(1);return 'https://wa.me/'+p+'?text='+encodeURIComponent(text)}
+function salePaidUsd(s){return (S.data.bizPayments||[]).filter(p=>p.saleId===s.id).reduce((n,p)=>n+bizUsd(p),0)}
+function salePending(s){return s.credit?Math.max(0,bizUsd(s)-salePaidUsd(s)):0}
+function stockOf(p){let n=+p.stock||0;for(const s of S.data.sales||[])if(!p.stockDate||String(s.date)>=String(p.stockDate))for(const it of s.items||[])if(it.productId===p.id)n-=+it.qty||0;return n}
+const prodById=id=>((S.user&&S.user.seller?S.sell&&S.sell.products:S.data&&S.data.products)||[]).find(p=>p.id===id);
+const activeProducts=()=>(S.data.products||[]).filter(p=>!p.archived);
+
+// Lo que entró hoy (ventas de contado + abonos) y lo que salió (gastos), por medio de pago, y el efectivo que debería haber.
+function bizDay(day){const D=S.data,inn={},cash={bs:0,usd:0};let sold=0,n=0;
+  const add=(x,sign)=>{const m=x.method||'otro';if(sign>0)inn[m]=(inn[m]||0)+bizUsd(x);if(m==='efectivo_bs')cash.bs+=sign*(x.currency==='BS'?+x.amount:(+x.amount)*(Number(x.rateUsed)||rate()));if(m==='efectivo_usd')cash.usd+=sign*(x.currency==='USD'?+x.amount:bizUsd(x))};
+  for(const s of D.sales||[]){if(localDay(s.date)!==day)continue;sold+=bizUsd(s);n++;if(!s.credit)add(s,1)}
+  for(const p of D.bizPayments||[])if(localDay(p.date)===day)add(p,1);
+  for(const e of D.bizExpenses||[])if(localDay(e.date)===day)add(e,-1);
+  return {sold,n,inn,cash}}
+// Resultado del mes, en dólares a la tasa de cada día.
+function bizMonthSum(mk){const D=S.data;let sales=0,cogs=0,buy=0,exp=0,ret=0,n=0;
+  for(const s of D.sales||[]){if(localDay(s.date).slice(0,7)!==mk)continue;sales+=bizUsd(s);n++;for(const it of s.items||[]){const p=prodById(it.productId);if(p&&p.cost)cogs+=p.cost*(+it.qty||0)}}
+  for(const e of D.bizExpenses||[]){if(localDay(e.date).slice(0,7)!==mk)continue;const u=bizUsd(e);if(e.category==='retiro')ret+=u;else if(e.category==='mercancia')buy+=u;else exp+=u}
+  const pending=(D.sales||[]).reduce((t,s)=>t+salePending(s),0);
+  return {sales,cogs,buy,exp,ret,n,pending,profit:sales-buy-exp}}
+// Saldo de las cuentas: las ventas y abonos entran, los gastos del negocio salen (si se eligió una cuenta).
+function bizAccFlow(a){const D=S.data;let b=0;const c=x=>conv(+x.amount||0,x.currency,a.currency);
+  for(const s of D.sales||[])if(s.accountId===a.id&&!s.credit)b+=c(s);
+  for(const p of D.bizPayments||[])if(p.accountId===a.id)b+=c(p);
+  for(const e of D.bizExpenses||[])if(e.accountId===a.id)b-=c(e);
+  return b}
+
+const plusLock=what=>`<div class="card"><b>${what} es parte de Negocio Plus</b><span class="mut">Negocio Plus suma catálogo de productos con inventario, recibos para WhatsApp, Excel para tu contador y vendedores que registran ventas desde su teléfono.</span><a class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" target="_blank" rel="noopener" href="${waLink(BIZ_WA,'Hola, quiero activar Negocio Plus en Quincena VE. Mi usuario es '+(S.user?.username||''))}">Pedir Negocio Plus por WhatsApp</a></div>`;
+const gigadevsCard=()=>`<div class="card"><b>¿Tu negocio creció?</b><span class="mut">Gigadevs, los creadores de Quincena VE, hacen sistemas administrativos a la medida, tiendas en línea y páginas web.</span><a class="btn o" style="display:flex;align-items:center;justify-content:center;text-decoration:none" target="_blank" rel="noopener" href="${waLink(BIZ_WA,'Hola Gigadevs, uso Quincena VE Negocio y quiero información de un sistema para mi negocio.')}">Hablar con Gigadevs</a></div>`;
+
+// ---- Tarjeta en Más ----
+function bizMasCard(){if(S.user?.seller)return '';const b=S.data.business||{};
+  return bizOn()?`<div class="card"><div class="row sp"><b>Mi negocio</b>${isPlus()?'<span class="pill" style="background:var(--gs);color:var(--g)">Plus</span>':''}</div><span class="mut">${esc(b.name||'Sin nombre')} · las ventas y gastos del negocio van aparte de tu quincena.</span><button class="btn o" data-biz="conf">Configurar el negocio</button></div>`
+  :`<div class="card"><b>¿Tienes un negocio?</b><span class="mut">Activa el modo Negocio: ventas en $ y Bs. con la tasa del día, fiado, gastos del negocio, cierre de caja y ganancia del mes. Aparte de tu quincena.</span><button class="btn" data-biz="conf">Activar mi negocio</button></div>`}
+
+// ---- Pestaña Negocio ----
+function bizView(){const sub=S.bsub||'hoy',b=S.data.business||{};
+  const tabs=`<div class="chips">${BSUBS.map(([k,l])=>`<button class="chip ${sub===k?'on':''}" data-biz="sub:${k}">${l}${PLUS_SUBS.includes(k)&&!isPlus()?' · Plus':''}</button>`).join('')}</div>`;
+  const body={hoy:bizHoy,ventas:bizVentas,fiado:bizFiado,gastos:bizGastos,mes:bizMes,productos:bizProductos,equipo:bizEquipo}[sub]||bizHoy;
+  return head()+`<div class="row sp"><b style="font-size:18px">${esc(b.name||'Mi negocio')}</b><button class="link" data-biz="conf">Configurar</button></div>`+tabs+body()}
+function saleRow(s,opts={}){const pend=salePending(s),items=(s.items||[]).map(it=>`${iv(it.qty)} ${esc(it.name)}`).join(', ');
+  return `<div class="item"><div><b>${s.credit?'Fiado'+(s.client?' · '+esc(s.client):''):esc(s.client||METHODS[s.method]||'Venta')}</b><div class="mut">${fmtDay(s.date)} · ${METHODS[s.method]||''}${items?' · '+items:''}${s.seller?' · vendió '+esc(s.seller):''}${pend>0.005?' · debe '+show(pend):''}${s.note?' · '+esc(s.note):''}</div></div><div class="row" style="gap:4px"><span class="amt">${money(s.amount,s.currency)}</span>${opts.actions?`${isPlus()?`<button class="link" data-biz="recibo:${esc(s.id)}">Recibo</button>`:''}<button class="link" data-del="sales:${esc(s.id)}" aria-label="Eliminar venta">✕</button>`:''}</div></div>`}
+function bizHoy(){const t=bizDay(bizToday()),last=(S.data.cashClosings||[]).find(c=>localDay(c.date)===bizToday()),sales=(S.data.sales||[]).filter(s=>localDay(s.date)===bizToday());
+  const inn=Object.entries(t.inn).sort((a,b)=>b[1]-a[1]);
+  return `<div class="card hero" style="gap:6px"><div>Vendiste hoy</div><div class="big">${show(t.sold)}</div><div style="font-size:14px;opacity:.9">${t.n} ${t.n===1?'venta':'ventas'} · ${S.cur==='BS'?money(t.sold,'USD'):money(t.sold*rate(),'BS')} a la tasa del día</div></div>
+<div class="row" style="gap:10px"><button class="btn" style="flex:1" data-sheet="bizventa">+ Venta</button><button class="btn o" style="flex:1" data-sheet="bizgasto">Gasto del negocio</button></div>
+<div class="card"><b>Cobrado hoy</b>${inn.length?inn.map(([m,u])=>`<div class="row sp"><span>${METHODS[m]||m}</span><span class="amt">${show(u)}</span></div>`).join(''):'<span class="mut">Todavía no has cobrado nada hoy.</span>'}</div>
+<div class="card"><b>Caja de hoy</b><div class="row sp"><span>Efectivo en Bs. que debería haber</span><span class="amt">${money(t.cash.bs,'BS')}</span></div><div class="row sp"><span>Efectivo en dólares</span><span class="amt">${money(t.cash.usd,'USD')}</span></div>${last?`<span class="mut">Cerraste la caja: contaste ${money(last.countedBs,'BS')} y ${money(last.countedUsd,'USD')}.</span>`:''}<button class="btn o" data-sheet="bizcierre">${last?'Volver a contar':'Cerrar la caja'}</button></div>
+<div class="card"><b>Ventas de hoy</b>${sales.map(s=>saleRow(s,{actions:true})).join('')||'<span class="mut">Registra tu primera venta con el botón + Venta.</span>'}</div>`}
+function bizVentas(){const all=(S.data.sales||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,150);
+  return `<button class="btn" data-sheet="bizventa">+ Venta</button><div class="card">${all.map(s=>saleRow(s,{actions:true})).join('')||'<span class="mut">Aún no hay ventas.</span>'}</div>`}
+function bizFiado(){const open=(S.data.sales||[]).filter(s=>salePending(s)>0.005).sort((a,b)=>String(a.dueDate||a.date).localeCompare(String(b.dueDate||b.date))),tot=open.reduce((n,s)=>n+salePending(s),0),b=S.data.business||{};
+  return `<div class="card"><div class="row sp"><b>Te deben tus clientes</b><b style="color:var(--g)">${show(tot)}</b></div>${open.map(s=>{const p=salePending(s),msg=`Hola${s.client?' '+s.client:''}, te recuerdo el pago pendiente de ${money(p,'USD')} (${money(p*rate(),'BS')} a la tasa BCV de hoy) en ${b.name||'mi negocio'}. ¡Gracias!`;
+    return `<div class="item"><div><b>${esc(s.client||'Cliente')}</b><div class="mut">Debe ${show(p)} de ${money(s.amount,s.currency)} · ${fmtDay(s.date)}${s.dueDate?' · paga el '+fmtDay(s.dueDate):''}</div></div><div class="row" style="gap:4px">${s.phone?`<a class="link" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${waLink(s.phone,msg)}">Recordar</a>`:''}<button class="btn s" data-biz="abono:${esc(s.id)}">Abonó</button></div></div>`}).join('')||'<span class="mut">Nadie te debe. Cuando vendas fiado, marca "Es fiado" en la venta.</span>'}</div>`}
+function bizGastos(){const mk=bizMonth(),rows=(S.data.bizExpenses||[]).filter(e=>localDay(e.date).slice(0,7)===mk).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  return `<div class="row" style="gap:10px"><button class="btn" style="flex:1" data-sheet="bizgasto">+ Gasto</button><button class="btn o" style="flex:1" data-sheet="bizretiro">Me pago a mí</button></div><div class="card"><b>Gastos de este mes</b>${rows.map(e=>`<div class="item"><div><b>${e.category==='retiro'?'Te pagaste':esc(e.description||BIZ_CATS[e.category]||'Gasto')}</b><div class="mut">${fmtDay(e.date)} · ${e.category==='retiro'?'Pasó a tu quincena':BIZ_CATS[e.category]||''}${e.supplier?' · '+esc(e.supplier):''}</div></div><div class="row" style="gap:4px"><span class="amt">${money(e.amount,e.currency)}</span><button class="link" data-del="bizExpenses:${esc(e.id)}" aria-label="Eliminar gasto">✕</button></div></div>`).join('')||'<span class="mut">Anota aquí la mercancía que compras, el alquiler, los servicios y los sueldos.</span>'}</div>`}
+function bizMes(){const m=bizMonthSum(bizMonth()),line=(l,v,st='')=>`<div class="row sp"><span>${l}</span><span class="amt" style="${st}">${show(v)}</span></div>`;
+  return `<div class="card hero" style="gap:6px"><div>Ganancia de ${new Date().toLocaleDateString('es-VE',{month:'long'})}</div><div class="big">${show(m.profit)}</div><div style="font-size:14px;opacity:.9">Ventas menos compras y gastos, en dólares a la tasa de cada día</div></div>
+<div class="card">${line('Ventas ('+m.n+')',m.sales)}${line('Compras de mercancía',-m.buy)}${line('Otros gastos del negocio',-m.exp)}${m.cogs?`<span class="mut">Costo de lo vendido según tus productos: ${show(m.cogs)}</span>`:''}<hr style="border:0;border-top:1px solid var(--line);width:100%">${line('Ganancia',m.profit,'color:var(--g)')}${line('Te pagaste a ti',m.ret)}${line('Fiado por cobrar',m.pending)}</div>
+${isPlus()?`<div class="card"><b>Para tu contador</b><span class="mut">Descarga las ventas, abonos y gastos del mes en un archivo que abre Excel.</span><button class="btn o" data-biz="excel">Descargar Excel del mes</button></div>`:plusLock('El Excel para tu contador')}
+<p class="mut" style="text-align:center">Quincena VE lleva tus cuentas; no emite facturas fiscales.</p>${gigadevsCard()}`}
+function bizProductos(){if(!isPlus())return plusLock('El catálogo de productos');const ps=activeProducts().sort((a,b)=>a.name.localeCompare(b.name));
+  return `<button class="btn" data-biz="prod:">+ Producto</button><div class="card">${ps.map(p=>{const st=stockOf(p);return `<div class="item"><div><b>${esc(p.name)}</b><div class="mut">${money(p.price,'USD')} · ${money(p.price*rate(),'BS')}${p.track?` · <span style="color:${st<=0?'var(--bad)':'inherit'}">quedan ${iv(Math.round(st*100)/100)}</span>`:''}</div></div><button class="link" data-biz="prod:${esc(p.id)}">Editar</button></div>`}).join('')||'<span class="mut">Agrega lo que vendes con su precio en dólares: al vender lo tocas y se suma solo, en $ o en Bs.</span>'}</div>`}
+function bizEquipo(){if(!isPlus())return plusLock('Agregar vendedores');if(!S.bsellers){S.bsellers={loading:true};api('/api/biz/sellers').then(r=>{S.bsellers=r;render()}).catch(e=>{S.bsellers={error:friendly(e)};render()})}
+  const r=S.bsellers;if(r.loading)return '<p class="mut">Cargando…</p>';if(r.error)return `<p class="mut">${esc(r.error)}</p>`;
+  return `<div class="card"><b>Vendedores</b><span class="mut">Cada vendedor entra con su usuario en la web o la app y solo puede registrar ventas. Tú las ves aquí con su nombre. Máximo ${r.max}.</span>${(r.sellers||[]).map(v=>`<div class="item"><div><b>${esc(v.username)}</b><div class="mut">${v.active?'Activo':'Sin acceso'}</div></div><div class="row" style="gap:4px"><button class="link" data-biz="vpass:${v.id}">Nueva clave</button><button class="link" data-biz="vtoggle:${v.id}">${v.active?'Quitar acceso':'Dar acceso'}</button></div></div>`).join('')||''}<button class="btn o" data-sheet="bizvend">+ Agregar vendedor</button></div>`}
+
+// ---- Formularios ----
+function cartHtml(){const c=S.cart||{},ids=Object.keys(c).filter(k=>c[k]>0);if(!ids.length)return '';let t=0;
+  return '<div class="card" style="gap:6px">'+ids.map(id=>{const p=prodById(id);if(!p)return '';t+=p.price*c[id];return `<div class="row sp"><span>${iv(c[id])} × ${esc(p.name)}</span><span class="row" style="gap:4px"><span class="amt">${money(p.price*c[id],'USD')}</span><button type="button" class="link" data-biz="rem:${esc(id)}" aria-label="Quitar uno">−</button></span></div>`}).join('')+`<div class="row sp"><b>Total</b><b>${money(t,'USD')}</b></div></div>`}
+function cartTotalUsd(){const c=S.cart||{};return Object.keys(c).reduce((n,id)=>{const p=prodById(id);return n+(p?p.price*c[id]:0)},0)}
+function syncCart(){const box=document.getElementById('cart');if(box)box.innerHTML=cartHtml();const f=document.getElementById('f-sheet')||document.getElementById('f-sell');if(!f)return;const cur=f.querySelector('[name=currency]').value,t=cartTotalUsd();if(t>0)f.querySelector('[name=amount]').value=iv(Math.round((cur==='BS'?t*rate():t)*100)/100)}
+const methodSel=(sel='pago_movil')=>`<label>¿Cómo te pagaron?<select name="method">${Object.entries(METHODS).map(([v,l])=>`<option value="${v}" ${v===sel?'selected':''}>${l}</option>`).join('')}</select></label>`;
+const curSel=(c='BS',label='Moneda')=>`<label>${label}<select name="currency"><option value="BS" ${c==='BS'?'selected':''}>Bolívares (Bs.)</option><option value="USD" ${c!=='BS'?'selected':''}>Dólares ($)</option></select></label>`;
+function saleFields(products){return `${products.length?`<label>Productos (toca para sumar)<div class="chips">${products.map(p=>`<button type="button" class="chip" data-biz="add:${esc(p.id)}">${esc(p.name)} · ${money(p.price,'USD')}</button>`).join('')}</div></label><div id="cart">${cartHtml()}</div>`:''}
+<label>Monto<input name="amount" inputmode="decimal" placeholder="0,00" required></label>${curSel('BS')}${methodSel()}
+<label class="achk"><input type="checkbox" name="credit" value="1"> Es fiado (me paga después)</label>
+<label>Cliente (obligatorio si es fiado)<input name="client" maxlength="80"></label><label>Teléfono del cliente (opcional, para recordarle por WhatsApp)<input name="phone" inputmode="tel" maxlength="30" placeholder="0414 000 0000"></label><label>¿Para cuándo paga? (opcional)<input name="dueDate" type="date"></label><label>Nota (opcional)<input name="note" maxlength="200"></label>`}
+function bizSheet(k){const D=S.data,b=D.business||{},wrap=(h,btn='Guardar')=>`<div class="sheet"><form id="f-sheet" data-k="${k}">${h}<button class="btn">${btn}</button><button type="button" class="btn o" id="x">Cancelar</button></form></div>`;
+  if(k==='bizconf')return wrap(`<h1>Mi negocio</h1><label>Nombre del negocio<input name="name" maxlength="80" value="${esc(b.name||'')}" placeholder="Bodega Ana" required></label><label>WhatsApp del negocio (opcional, sale en los recibos)<input name="phone" inputmode="tel" maxlength="30" value="${esc(b.phone||'')}"></label><span class="mut">Las ventas y gastos del negocio van aparte: no se mezclan con tu quincena ni tu presupuesto. Quincena VE no emite facturas fiscales.</span>${b.enabled?'<button type="button" class="btn o" style="color:var(--bad);border-color:var(--bad)" data-biz="off">Ocultar el modo Negocio</button>':''}`,b.enabled?'Guardar':'Activar mi negocio');
+  if(k==='bizventa')return wrap(`<h1>Nueva venta</h1>${saleFields(isPlus()?activeProducts():[])}${accField('','¿A qué cuenta entró? (opcional)')}`);
+  if(k==='bizgasto')return wrap(`<h1>Gasto del negocio</h1><label>Monto<input name="amount" inputmode="decimal" placeholder="0,00" required></label>${curSel('BS')}<label>Tipo<select name="category">${Object.entries(BIZ_CATS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label>${methodSel('pago_movil').replace('¿Cómo te pagaron?','¿Cómo pagaste?')}<label>Proveedor (opcional)<input name="supplier" maxlength="80"></label><label>Nota (opcional)<input name="description" maxlength="200"></label>${accField('','¿De qué cuenta salió? (opcional)')}`);
+  if(k==='bizretiro')return wrap(`<h1>Me pago a mí</h1><span class="mut">Pasa dinero del negocio a tu quincena personal: sale del negocio como "te pagaste" y entra como ingreso tuyo.</span><label>Monto<input name="amount" inputmode="decimal" placeholder="0,00" required></label>${curSel('USD')}${methodSel('efectivo_usd').replace('¿Cómo te pagaron?','¿Cómo lo sacaste?')}${accField('','¿De qué cuenta sale? (opcional)')}${accounts().length?`<label>¿A qué cuenta tuya entra? (opcional)<select name="toAccountId">${accOpts('')}</select></label>`:''}`);
+  if(k==='bizcierre'){const t=bizDay(bizToday());return wrap(`<h1>Cerrar la caja</h1><span class="mut">Según lo anotado deberías tener ${money(t.cash.bs,'BS')} y ${money(t.cash.usd,'USD')} en efectivo.</span><label>Efectivo en Bs. que contaste<input name="countedBs" inputmode="decimal" placeholder="0,00"></label><label>Efectivo en dólares que contaste<input name="countedUsd" inputmode="decimal" placeholder="0,00"></label><label>Nota (opcional)<input name="note" maxlength="200"></label>`)}
+  if(k==='bizabono'){const s=(D.sales||[]).find(x=>x.id===S.arg)||{},p=salePending(s),c=s.currency||'USD';return wrap(`<h1>${esc(s.client||'El cliente')} abonó</h1><span class="mut">Debe ${money(p,'USD')} (${money(p*rate(),'BS')} a la tasa de hoy).</span><label>Monto<input name="amount" inputmode="decimal" value="${iv(Math.round((c==='BS'?p*rate():p)*100)/100)}" required></label>${curSel(c)}${methodSel(c==='BS'?'pago_movil':'efectivo_usd')}${accField('','¿A qué cuenta entró? (opcional)')}`)}
+  if(k==='bizprod'){const p=prodById(S.arg)||{};return wrap(`<h1>${p.id?'Editar producto':'Nuevo producto'}</h1><label>Nombre<input name="name" maxlength="80" value="${esc(p.name||'')}" required></label><label>Precio de venta en dólares<input name="price" inputmode="decimal" value="${p.id?iv(p.price):''}" placeholder="0,00" required></label><label>Lo que te cuesta en dólares (opcional, para saber tu ganancia)<input name="cost" inputmode="decimal" value="${p.cost?iv(p.cost):''}"></label><label class="achk"><input type="checkbox" name="track" value="1" ${p.track?'checked':''}> Llevar la cuenta de cuántos quedan</label><label>¿Cuántos tienes ahora? (si llevas la cuenta)<input name="stock" inputmode="decimal" value="${p.id&&p.track?iv(Math.round(stockOf(p)*100)/100):''}"></label>${p.id?`<button type="button" class="btn o" style="color:var(--bad);border-color:var(--bad)" data-biz="parch:${esc(p.id)}">Quitar del catálogo</button>`:''}`)}
+  if(k==='bizvend')return wrap(`<h1>Nuevo vendedor</h1><span class="mut">Crea su usuario y su contraseña y dáselos. Solo podrá registrar ventas de tu negocio.</span><label>Usuario<input name="username" autocomplete="off" maxlength="40" required></label><label>Contraseña (mínimo 12 caracteres)<input name="password" type="text" autocomplete="off" minlength="12" required></label>`,'Crear vendedor');
+  if(k==='bizvpass')return wrap(`<h1>Nueva contraseña</h1><label>Contraseña nueva para el vendedor (mínimo 12 caracteres)<input name="password" type="text" autocomplete="off" minlength="12" required></label><span class="mut">Se cierra su sesión en sus teléfonos.</span>`);
+  return ''}
+
+// ---- Botones (data-biz="acción:dato") ----
+async function bizClick(t,D){const [a,arg]=String(D.biz).split(/:(.*)/s);
+  if(a==='sub'){S.bsub=arg;render();return}
+  if(a==='conf'){S.sheet='bizconf';render();return}
+  if(a==='off'){S.sheet=null;mutate(()=>{S.data.business={...S.data.business,enabled:false}},'Modo Negocio oculto. Tus datos del negocio se guardan.');S.tab='mas';render();return}
+  if(a==='abono'){S.sheet='bizabono';S.arg=arg;render();return}
+  if(a==='prod'){S.sheet='bizprod';S.arg=arg||null;render();return}
+  if(a==='parch'){const p=prodById(arg);S.sheet=null;if(p)mutate(()=>{p.archived=true},'Producto quitado del catálogo');return}
+  if(a==='add'||a==='rem'){S.cart=S.cart||{};S.cart[arg]=Math.max(0,(S.cart[arg]||0)+(a==='add'?1:-1));syncCart();return}
+  if(a==='vpass'){S.sheet='bizvpass';S.arg=arg;render();return}
+  if(a==='vtoggle'){const v=(S.bsellers?.sellers||[]).find(x=>String(x.id)===arg);if(!v)return;try{await api('/api/biz/sellers/'+arg,{method:'PATCH',body:JSON.stringify({active:!v.active})});S.bsellers=null;render();toast(v.active?'Le quitaste el acceso.':'Ya tiene acceso.')}catch(e){toast(friendly(e))}return}
+  if(a==='recibo'){const s=(S.data.sales||[]).find(x=>x.id===arg);if(s)window.open(waLink(s.phone||'',receiptText(s)),'_blank','noopener');return}
+  if(a==='excel'){excelMes();return}
+  if(a==='sellout'){try{await api('/api/logout',{method:'POST',body:'{}'})}catch(_){}Object.assign(S,{user:null,data:null,csrf:null,sell:null});await boot();return}}
+function receiptText(s){const b=S.data.business||{},items=(s.items||[]).map(it=>`${iv(it.qty)} × ${it.name}: ${money(it.price*it.qty,'USD')}`).join('\n'),pend=salePending(s);
+  return `${b.name||'Mi negocio'}\nRecibo de venta · ${fmtDay(s.date)}\n${items?items+'\n':''}Total: ${money(s.amount,s.currency)}${s.currency==='BS'?' ('+money(bizUsd(s),'USD')+')':''}\nPago: ${s.credit?'fiado':METHODS[s.method]||''}${pend>0.005?'\nPor pagar: '+money(pend,'USD'):''}\n¡Gracias por tu compra!${b.phone?'\nWhatsApp: '+b.phone:''}\n\nNo es factura fiscal.`}
+function csvCell(v){const t=String(v??'');return /[";\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t}
+function excelMes(){const mk=bizMonth(),D=S.data,rows=[['Tipo','Fecha','Detalle','Medio','Moneda','Monto','Tasa','Monto en USD','Vendedor']],r2=n=>String(Math.round(n*100)/100).replace('.',',');
+  for(const s of D.sales||[])if(localDay(s.date).slice(0,7)===mk)rows.push([s.credit?'Venta fiada':'Venta',localDay(s.date),[s.client,(s.items||[]).map(i=>i.qty+' '+i.name).join(' + '),s.note].filter(Boolean).join(' · '),METHODS[s.method],s.currency==='BS'?'Bs':'USD',r2(s.amount),s.rateUsed?r2(s.rateUsed):'',r2(bizUsd(s)),s.seller||'']);
+  for(const p of D.bizPayments||[])if(localDay(p.date).slice(0,7)===mk){const s=(D.sales||[]).find(x=>x.id===p.saleId);rows.push(['Abono de fiado',localDay(p.date),s?.client||'',METHODS[p.method],p.currency==='BS'?'Bs':'USD',r2(p.amount),p.rateUsed?r2(p.rateUsed):'',r2(bizUsd(p)),''])}
+  for(const e of D.bizExpenses||[])if(localDay(e.date).slice(0,7)===mk)rows.push([e.category==='retiro'?'Retiro del dueño':'Gasto: '+(BIZ_CATS[e.category]||''),localDay(e.date),[e.supplier,e.description].filter(Boolean).join(' · '),METHODS[e.method]||'',e.currency==='BS'?'Bs':'USD',r2(e.amount),e.rateUsed?r2(e.rateUsed):'',r2(bizUsd(e)),'']);
+  const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`${(D.business?.name||'negocio').replace(/[^\w-]+/g,'-')}-${mk}.csv`;a.click()}
+
+// ---- Guardar ----
+async function bizSubmit(f,d,btn){const k=f.id==='f-sell'?'sell':f.dataset.k,D=S.data,amt=num(d.amount),now=new Date().toISOString(),fail=m=>{throw new Error(m)};
+  const rateFor=c=>c==='BS'?rate():undefined;
+  if(k==='bizconf'){if(!String(d.name||'').trim())fail('Escribe el nombre del negocio.');S.sheet=null;S.tab='negocio';S.bsub='hoy';
+    mutate(()=>{D.business={enabled:true,name:d.name.trim().slice(0,80),phone:String(d.phone||'').trim().slice(0,30)};for(const key of ['sales','bizPayments','bizExpenses','products','cashClosings'])D[key]=D[key]||[]},'Listo: tu negocio está activo.');return}
+  if(['bizventa','bizgasto','bizretiro','bizabono','sell'].includes(k)&&!(amt>0))fail('Escribe un monto mayor a cero.');
+  if(k==='bizventa'||k==='sell'){const credit=!!d.credit,client=String(d.client||'').trim();if(credit&&!client)fail('Escribe el nombre del cliente que te debe.');
+    const c=S.cart||{},items=Object.keys(c).filter(id=>c[id]>0).map(id=>{const p=prodById(id);return p?{productId:id,name:p.name,qty:c[id],price:p.price}:null}).filter(Boolean);
+    const sale=clean({id:bizId('v'),date:now,amount:amt,currency:d.currency==='USD'?'USD':'BS',method:d.method,client:client||undefined,phone:String(d.phone||'').trim()||undefined,credit,dueDate:d.dueDate||undefined,note:String(d.note||'').trim()||undefined,accountId:d.accountId||undefined,items:items.length?items:undefined});
+    if(k==='sell'){const r=await api('/api/biz/seller/sale',{method:'POST',body:JSON.stringify(sale)});S.cart={};S.sell.sales=[r.sale,...(S.sell.sales||[])];render();toast('Venta registrada: '+money(r.sale.amount,r.sale.currency));return}
+    sale.rateUsed=rateFor(sale.currency);S.sheet=null;S.cart={};mutate(()=>{D.sales=D.sales||[];D.sales.unshift(sale)},(credit?'Fiado anotado: ':'Venta registrada: ')+money(amt,sale.currency),()=>{D.sales=D.sales.filter(x=>x.id!==sale.id);render();save()});return}
+  if(k==='bizgasto'){const e=clean({id:bizId('g'),date:now,amount:amt,currency:d.currency==='USD'?'USD':'BS',category:d.category,method:d.method,supplier:String(d.supplier||'').trim()||undefined,description:String(d.description||'').trim()||undefined,accountId:d.accountId||undefined});e.rateUsed=rateFor(e.currency);
+    S.sheet=null;mutate(()=>{D.bizExpenses=D.bizExpenses||[];D.bizExpenses.unshift(e)},'Gasto del negocio anotado');return}
+  if(k==='bizretiro'){const id=bizId('r'),cur=d.currency==='USD'?'USD':'BS',e=clean({id,date:now,amount:amt,currency:cur,category:'retiro',method:d.method,description:'Me pagué',accountId:d.accountId||undefined,rateUsed:rateFor(cur)});
+    const inc=clean({id:id+'_in',date:now,amount:amt,currency:cur,name:'Me pagué del negocio',kind:'negocio',accountId:d.toAccountId||undefined});
+    S.sheet=null;mutate(()=>{D.bizExpenses=D.bizExpenses||[];D.bizExpenses.unshift(e);D.incomes=D.incomes||[];D.incomes.unshift(inc)},'Listo: pasó a tu quincena');return}
+  if(k==='bizabono'){const s=(D.sales||[]).find(x=>x.id===S.arg);if(!s)fail('No encontramos esa venta.');const cur=d.currency==='USD'?'USD':'BS',u=cur==='BS'?amt/(rate()||1):amt;if(u>salePending(s)+0.01)fail('Es más de lo que debe. Baja el monto.');
+    const p=clean({id:bizId('a'),saleId:s.id,date:now,amount:amt,currency:cur,method:d.method,accountId:d.accountId||undefined,rateUsed:rateFor(cur)});S.sheet=null;mutate(()=>{D.bizPayments=D.bizPayments||[];D.bizPayments.unshift(p)},'Abono anotado');return}
+  if(k==='bizcierre'){const t=bizDay(bizToday()),cb=num(d.countedBs||0)||0,cu=num(d.countedUsd||0)||0,x={id:bizId('k'),date:now,countedBs:cb,countedUsd:cu,expectedBs:t.cash.bs,expectedUsd:t.cash.usd,note:String(d.note||'').trim()};
+    const db=cb-t.cash.bs,du=cu-t.cash.usd,msg=Math.abs(db)<0.01&&Math.abs(du)<0.01?'La caja cuadra.':`Diferencia: ${money(db,'BS')} y ${money(du,'USD')}.`;S.sheet=null;mutate(()=>{D.cashClosings=D.cashClosings||[];D.cashClosings.unshift(x)},'Caja cerrada. '+msg);return}
+  if(k==='bizprod'){const price=num(d.price),cost=num(d.cost||0)||0;if(!String(d.name||'').trim())fail('Escribe el nombre del producto.');if(!(price>=0))fail('Escribe el precio en dólares.');
+    const old=prodById(S.arg),track=!!d.track,st=num(d.stock||0)||0,newStock=track&&(!old||!old.track||Math.abs(st-stockOf(old))>0.0001);
+    const p={...(old||{id:bizId('p')}),name:d.name.trim().slice(0,80),price,cost,track,...(newStock?{stock:st,stockDate:now}:{})};S.sheet=null;
+    mutate(()=>{D.products=D.products||[];if(old)Object.assign(old,p);else D.products.push(p)},old?'Producto actualizado':'Producto agregado');return}
+  if(k==='bizvend'){await api('/api/biz/sellers',{method:'POST',body:JSON.stringify({username:d.username,password:d.password})});S.sheet=null;S.bsellers=null;render();toast('Vendedor creado. Dale su usuario y contraseña.');return}
+  if(k==='bizvpass'){await api('/api/biz/sellers/'+S.arg,{method:'PATCH',body:JSON.stringify({password:d.password})});S.sheet=null;render();toast('Contraseña cambiada.');return}}
+
+// ---- Modo vendedor: la cuenta solo registra ventas del negocio del dueño ----
+function sellerView(){if(!S.sell){S.sell={loading:true};api('/api/biz/seller').then(r=>{S.sell=r;if(r.rate&&S.data)S.data.exchangeRate=r.rate;render()}).catch(e=>{S.sell={error:friendly(e)};render()})}
+  const r=S.sell,top=`<div class="row sp head"><div><h1 class="logo" style="color:var(--g);font-size:22px">Quincena VE</h1><h1 class="ptitle">${esc(S.user.business||'Negocio')}</h1><div class="mut">Vendedor: ${esc(S.user.username)}</div></div><button class="link" data-biz="sellout:">Salir</button></div>`;
+  if(r.loading)return top+'<p class="mut">Cargando…</p>';if(r.error)return top+`<div class="card"><b>No puedes vender ahora</b><span class="mut">${esc(r.error)}</span></div>`;
+  const mine=(r.sales||[]).filter(s=>localDay(s.date)===bizToday()),tot=mine.reduce((n,s)=>n+bizUsd(s),0);
+  return top+`<div class="card hero" style="gap:6px"><div>Tus ventas de hoy</div><div class="big">${money(tot,'USD')}</div><div style="font-size:14px;opacity:.9">${mine.length} ${mine.length===1?'venta':'ventas'} · tasa ${money(r.rate,'BS')}</div></div>
+<form id="f-sell" class="card"><b>Nueva venta</b>${saleFields(r.products||[])}<button class="btn">Registrar venta</button></form>
+<div class="card"><b>Registradas hoy</b>${mine.map(s=>`<div class="item"><div><b>${esc(s.client||METHODS[s.method]||'Venta')}</b><div class="mut">${new Date(s.date).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'})} · ${s.credit?'fiado':METHODS[s.method]||''}</div></div><span class="amt">${money(s.amount,s.currency)}</span></div>`).join('')||'<span class="mut">Aún no registras ventas hoy.</span>'}</div>`}
+
+// Al cambiar la moneda de una venta con productos, el monto se recalcula.
+document.addEventListener('change',e=>{if(e.target.name==='currency'&&(e.target.closest('#f-sell')||e.target.closest('#f-sheet[data-k=bizventa]'))&&cartTotalUsd()>0)syncCart()});
