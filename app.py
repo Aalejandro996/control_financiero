@@ -137,7 +137,17 @@ DEFAULT_SHARED_DATA = {
     "plannedDebtPayments": [],  # agenda personal de pagos futuros de deuda
     "recurring": [],  # gastos fijos que se repiten cada mes
     "debtPlan": {"monthlyEssentials": 0.0, "monthlyCushion": 0.0, "paymentPercent": 60, "strategy": "avalanche", "configured": False},
+    # Quincena VE Negocio: el dinero del negocio va aparte del de la casa (no entra en gastos ni presupuesto personales).
+    "business": {"enabled": False, "name": "", "phone": ""},
+    "sales": [],  # ventas; las de crédito son el fiado (credit) y se van pagando con bizPayments
+    "bizPayments": [],  # abonos de clientes a ventas fiadas
+    "bizExpenses": [],  # compras de mercancía y gastos del negocio; "retiro" = el dueño se paga a sí mismo
+    "products": [],  # catálogo (Plus): precio en $, existencia contada en stockDate
+    "cashClosings": [],  # cierres de caja: lo que se contó al final del día
 }
+
+SALE_METHODS = "pago_movil|efectivo_bs|efectivo_usd|zelle|binance|punto|transferencia|otro"
+BIZ_CATEGORIES = "mercancia|alquiler|servicios|sueldos|transporte|impuestos|retiro|otro"
 
 
 class User(db.Model):
@@ -151,6 +161,9 @@ class User(db.Model):
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     signup_source = db.Column(db.String(120), nullable=True)  # de qué publicación o anuncio llegó (utm); None = directo
+    plan = db.Column(db.String(16), nullable=True)  # None/"free" o "plus" (Negocio Plus, lo activa un administrador)
+    plan_until = db.Column(db.DateTime(timezone=True), nullable=True)  # vence el Plus; None = sin vencimiento
+    owner_id = db.Column(db.Integer, nullable=True, index=True)  # cuenta de vendedor: id del dueño del negocio
 
 
 class SharedState(db.Model):
@@ -238,7 +251,8 @@ def migrate_user_email() -> None:
     def columns() -> set:
         return {c["name"] for c in sqlalchemy_inspect(db.engine).get_columns("user")}
 
-    for name, ddl in (("email", "VARCHAR(254)"), ("email_verified_at", "TIMESTAMP WITH TIME ZONE"), ("signup_source", "VARCHAR(120)")):
+    for name, ddl in (("email", "VARCHAR(254)"), ("email_verified_at", "TIMESTAMP WITH TIME ZONE"), ("signup_source", "VARCHAR(120)"),
+                      ("plan", "VARCHAR(16)"), ("plan_until", "TIMESTAMP WITH TIME ZONE"), ("owner_id", "INTEGER")):
         if name in columns():
             continue
         try:
@@ -450,6 +464,27 @@ def csrf_ok() -> bool:
     return bool(token and supplied and hmac.compare_digest(token, supplied))
 
 
+def is_plus(user: "User") -> bool:
+    """Negocio Plus activo: lo activa un administrador (tras el pago) y puede tener fecha de vencimiento."""
+    if not user or (user.plan or "free") != "plus":
+        return False
+    until = user.plan_until
+    if until is not None and until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return until is None or until > datetime.now(timezone.utc)
+
+
+def user_payload(user: "User") -> dict:
+    owner = db.session.get(User, user.owner_id) if user.owner_id else None
+    business = ""
+    if owner is not None:
+        state = SharedState.query.filter_by(user_id=owner.id).first()
+        business = str(((state.data or {}).get("business") or {}).get("name") or "") if state else ""
+    return {"username": user.username, "role": user.role, "must_change_password": user.must_change_password,
+            "plan": "plus" if is_plus(user) else "free", "plan_until": user.plan_until.isoformat() if user.plan_until else None,
+            "seller": owner is not None, "owner": owner.username if owner is not None else None, "business": business or (owner.username if owner else "")}
+
+
 def require_auth(admin: bool = False, allow_password_change: bool = False):
     def decorate(fn):
         @wraps(fn)
@@ -524,6 +559,35 @@ def _clean_rows(raw, limit: int, spec: dict) -> list:
     return out
 
 
+def normalize_business(value: dict, result: dict) -> None:
+    """Quincena VE Negocio: ventas, fiado, gastos del negocio, productos y cierres de caja."""
+    raw = value.get("business") if isinstance(value.get("business"), dict) else {}
+    result["business"] = {"enabled": raw.get("enabled") is True, "name": str(raw.get("name") or "")[:80], "phone": str(raw.get("phone") or "")[:30]}
+    sales = _clean_rows(value.get("sales"), 20000, {
+        "id": "id", "date": "date", "amount": "pos", "currency": "cur", "method": f"enum:{SALE_METHODS}", "accountId": "ref",
+        "client": "str:80", "phone": "str:30", "credit": "bool", "dueDate": "date", "note": "str:200", "rateUsed": "pos", "seller": "str:40"})
+    raw_sales = {str(r.get("id")): r for r in value.get("sales", []) if isinstance(r, dict)} if isinstance(value.get("sales"), list) else {}
+    for sale in sales:
+        raw_items = raw_sales.get(sale["id"], {}).get("items")
+        items = [row for row in _clean_rows(raw_items[:50] if isinstance(raw_items, list) else [], 50,
+                                            {"productId": "ref", "name": "str:80", "qty": "pos", "price": "pos"}) if row["qty"] > 0]
+        if items:
+            sale["items"] = items
+        if not sale["rateUsed"]:
+            sale.pop("rateUsed")
+    result["sales"] = sales
+    result["bizPayments"] = _clean_rows(value.get("bizPayments"), 20000, {
+        "id": "id", "saleId": "ref", "date": "date", "amount": "pos", "currency": "cur", "method": f"enum:{SALE_METHODS}", "accountId": "ref", "rateUsed": "pos"})
+    result["bizExpenses"] = _clean_rows(value.get("bizExpenses"), 20000, {
+        "id": "id", "date": "date", "amount": "pos", "currency": "cur", "category": f"enum:{BIZ_CATEGORIES}", "description": "str:200",
+        "supplier": "str:80", "method": f"enum:{SALE_METHODS}", "accountId": "ref", "rateUsed": "pos"})
+    result["products"] = _clean_rows(value.get("products"), 2000, {
+        "id": "id", "name": "str:80", "code": "str:40", "price": "pos", "cost": "pos", "stock": "num", "stockDate": "date",
+        "track": "bool", "archived": "bool"})
+    result["cashClosings"] = _clean_rows(value.get("cashClosings"), 3000, {
+        "id": "id", "date": "date", "countedBs": "pos", "countedUsd": "pos", "expectedBs": "num", "expectedUsd": "num", "note": "str:200"})
+
+
 def normalize_shared_data(value) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Los datos deben tener formato de objeto JSON.")
@@ -559,12 +623,13 @@ def normalize_shared_data(value) -> dict:
         "id": "id", "date": "date", "fromId": "ref", "toId": "ref", "amountFrom": "pos", "amountTo": "pos", "note": "str:120"})
     result["incomes"] = _clean_rows(value.get("incomes"), 10000, {
         "id": "id", "date": "date", "amount": "pos", "currency": "cur", "name": "str:80", "sourceId": "ref", "accountId": "ref",
-        "kind": "enum:extra|sueldo|cobro"})
+        "kind": "enum:extra|sueldo|cobro|negocio"})
     result["receivables"] = _clean_rows(value.get("receivables"), 2000, {
         "id": "id", "person": "str:80", "amount": "pos", "paid": "pos", "currency": "cur", "date": "date", "dueDate": "date", "note": "str:200", "accountId": "ref"})
     for r in result["receivables"]:
         r["paid"] = min(r["paid"], r["amount"])
     result["termsVersion"] = str(value.get("termsVersion") or "")[:20]
+    normalize_business(value, result)
     income = value.get("income") if isinstance(value.get("income"), dict) else {}
     try:
         income_amount = float(income.get("amount", 0))
@@ -909,7 +974,7 @@ def establish_user_session(user: User) -> dict:
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     audit("passkey_login_succeeded", "Inicio de sesión mediante passkey", user.id)
-    return {"ok": True, "csrf_token": session["csrf_token"], "user": {"username": user.username, "role": user.role, "must_change_password": user.must_change_password}}
+    return {"ok": True, "csrf_token": session["csrf_token"], "user": user_payload(user)}
 
 
 def validate_school_balances(data: dict) -> str | None:
@@ -965,7 +1030,7 @@ def three_way_merge(base_data, incoming_data, current_data):
     current = normalize_shared_data(current_data)
     merged = copy.deepcopy(current)
     conflicts = []
-    for key in ("currency", "income", "budgets", "debtPlan", "bsSavings"):
+    for key in ("currency", "income", "budgets", "debtPlan", "bsSavings", "business"):
         if incoming[key] != base[key]:
             if current[key] != base[key] and current[key] != incoming[key]:
                 conflicts.append(key)
@@ -976,7 +1041,7 @@ def three_way_merge(base_data, incoming_data, current_data):
         if incoming[key] != base[key]:
             merged[key] = incoming[key]
     for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring",
-                "accounts", "transfers", "incomes", "receivables"):
+                "accounts", "transfers", "incomes", "receivables", "sales", "bizPayments", "bizExpenses", "products", "cashClosings"):
         merged[key], row_conflicts = merge_array(base[key], incoming[key], current[key])
         if row_conflicts:
             conflicts.extend([f"{key}:{x}" for x in row_conflicts])
@@ -1235,7 +1300,7 @@ def status():
         setup_required=required,
         authenticated=bool(user),
         csrf_token=session.get("csrf_token"),
-        user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password} if user else None,
+        user=user_payload(user) if user else None,
         app_name="Quincena VE", registration_open=registration_open(),
     )
 
@@ -1296,7 +1361,7 @@ def login():
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
     audit("login_succeeded", "Inicio de sesión correcto", user.id)
-    return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password})
+    return jsonify(ok=True, csrf_token=session["csrf_token"], user=user_payload(user))
 
 
 @app.get("/api/passkeys/status")
@@ -1672,7 +1737,7 @@ def start_session(user: "User"):
     session["ps"] = pw_stamp(user)
     session["csrf_token"] = secrets.token_urlsafe(32)
     session.permanent = True
-    return jsonify(ok=True, csrf_token=session["csrf_token"], user={"username": user.username, "role": user.role, "must_change_password": user.must_change_password})
+    return jsonify(ok=True, csrf_token=session["csrf_token"], user=user_payload(user))
 
 
 @app.post("/api/register")
@@ -1777,7 +1842,7 @@ def mobile_login():
     audit("login_succeeded", "Inicio de sesión desde la app móvil", user.id)
     notify_security(user, "Nuevo inicio de sesión en su cuenta – Quincena VE",
                     f"Se inició sesión en su cuenta desde la app de Android ({str(body.get('device') or 'dispositivo').strip()[:60]}).")
-    return jsonify(ok=True, token=token, user={"username": user.username, "role": user.role})
+    return jsonify(ok=True, token=token, user=user_payload(user))
 
 
 @app.post("/api/mobile/logout")
@@ -1919,6 +1984,132 @@ def put_state():
     return jsonify(ok=True, data=normalize_shared_data(record.data), revision=record.revision, updated_at=record.updated_at.isoformat())
 
 
+MAX_SELLERS = 5
+
+
+def _seller_json(u: "User") -> dict:
+    return {"id": u.id, "username": u.username, "active": u.active, "created_at": u.created_at.isoformat() if u.created_at else None}
+
+
+@app.get("/api/biz/sellers")
+@require_auth()
+def list_sellers():
+    """Vendedores del negocio (Negocio Plus): cuentas que solo pueden registrar ventas."""
+    if g.user.owner_id:
+        return jsonify(error="Esta opción es solo para el dueño del negocio."), 403
+    sellers = User.query.filter_by(owner_id=g.user.id).order_by(User.created_at.asc()).all()
+    return jsonify(sellers=[_seller_json(u) for u in sellers], plus=is_plus(g.user), max=MAX_SELLERS)
+
+
+@app.post("/api/biz/sellers")
+@limiter.limit("20 per hour")
+@require_auth()
+def create_seller():
+    if g.user.owner_id:
+        return jsonify(error="Esta opción es solo para el dueño del negocio."), 403
+    if not is_plus(g.user):
+        return jsonify(error="Agregar vendedores es parte de Negocio Plus.", code="plus_required"), 402
+    if User.query.filter_by(owner_id=g.user.id, active=True).count() >= MAX_SELLERS:
+        return jsonify(error=f"Puedes tener hasta {MAX_SELLERS} vendedores activos."), 409
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username", "")).strip().lower()
+    password = str(body.get("password", ""))
+    if len(username) < 3 or len(username) > 40 or not all(c.isalnum() or c in "._-" for c in username):
+        return jsonify(error="El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo."), 400
+    if password_problem(password, username):
+        return jsonify(error=password_problem(password, username)), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify(error="Ese usuario ya existe. Elige otro."), 409
+    seller = User(username=username, password_hash=generate_password_hash(password), role="member", must_change_password=False,
+                  owner_id=g.user.id, signup_source="vendedor")
+    db.session.add(seller)
+    db.session.commit()
+    audit("seller_created", f"Vendedor {username}", g.user.id)
+    return jsonify(ok=True, seller=_seller_json(seller))
+
+
+@app.patch("/api/biz/sellers/<int:seller_id>")
+@require_auth()
+def update_seller(seller_id: int):
+    seller = db.session.get(User, seller_id)
+    if seller is None or seller.owner_id != g.user.id:
+        return jsonify(error="Vendedor no encontrado."), 404
+    body = request.get_json(silent=True) or {}
+    if "password" in body:
+        password = str(body.get("password") or "")
+        if password_problem(password, seller.username):
+            return jsonify(error=password_problem(password, seller.username)), 400
+        seller.password_hash = generate_password_hash(password)
+        DeviceToken.query.filter_by(user_id=seller.id, revoked_at=None).update({"revoked_at": datetime.now(timezone.utc)})
+    if "active" in body:
+        if not isinstance(body["active"], bool):
+            return jsonify(error="active debe ser true o false."), 400
+        if body["active"] and not seller.active and User.query.filter_by(owner_id=g.user.id, active=True).count() >= MAX_SELLERS:
+            return jsonify(error=f"Puedes tener hasta {MAX_SELLERS} vendedores activos."), 409
+        seller.active = body["active"]
+        if not seller.active:
+            DeviceToken.query.filter_by(user_id=seller.id, revoked_at=None).update({"revoked_at": datetime.now(timezone.utc)})
+    db.session.commit()
+    audit("seller_updated", f"Vendedor {seller.username}", g.user.id)
+    return jsonify(ok=True, seller=_seller_json(seller))
+
+
+def _seller_owner():
+    """Para una cuenta de vendedor: (dueño, estado del dueño) si el negocio puede recibir ventas, o una respuesta de error."""
+    owner = db.session.get(User, g.user.owner_id) if g.user.owner_id else None
+    if owner is None:
+        return None, (jsonify(error="Esta cuenta no es de vendedor."), 403)
+    if not owner.active or not is_plus(owner):
+        return None, (jsonify(error="El negocio no tiene Negocio Plus activo. Avisa al dueño."), 402)
+    return owner, None
+
+
+@app.get("/api/biz/seller")
+@require_auth()
+def seller_home():
+    owner, error = _seller_owner()
+    if error:
+        return error
+    data = normalize_shared_data(ensure_user_state(owner.id).data)
+    mine = [x for x in data["sales"] if x.get("seller") == g.user.username][:200]
+    products = [{"id": p["id"], "name": p["name"], "price": p["price"], "code": p["code"]} for p in data["products"] if not p["archived"]]
+    return jsonify(business=data["business"]["name"] or owner.username, country=data["country"], rate=data["exchangeRate"],
+                   products=products, sales=mine)
+
+
+@app.post("/api/biz/seller/sale")
+@limiter.limit("300 per hour")
+@require_auth()
+def seller_sale():
+    """El vendedor registra una venta: se agrega a los datos del dueño (que la ve al sincronizar)."""
+    owner, error = _seller_owner()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    sale = {**{k: body.get(k) for k in ("amount", "currency", "method", "client", "phone", "credit", "dueDate", "note", "items")},
+            "id": "v" + secrets.token_hex(8), "date": datetime.now(timezone.utc).isoformat(), "seller": g.user.username}
+    record = db.session.query(SharedState).filter_by(user_id=owner.id).with_for_update().first()
+    if record is None:
+        db.session.rollback()
+        record = ensure_user_state(owner.id)
+        record = db.session.query(SharedState).filter_by(user_id=owner.id).with_for_update().first()
+    data = normalize_shared_data(record.data)
+    if sale.get("currency") in ("BS", "VES"):
+        sale["rateUsed"] = data["exchangeRate"]
+    cleaned = normalize_shared_data({**data, "sales": [sale]})["sales"]
+    if not cleaned or cleaned[0]["amount"] <= 0:
+        db.session.rollback()
+        return jsonify(error="Escribe un monto mayor a cero."), 400
+    data["sales"] = [cleaned[0]] + data["sales"]
+    record.data = normalize_shared_data(data)
+    record.revision += 1
+    record.updated_at = datetime.now(timezone.utc)
+    record.updated_by = g.user.id
+    db.session.commit()
+    audit("seller_sale", f"Venta de {g.user.username}", g.user.id)
+    return jsonify(ok=True, sale=cleaned[0])
+
+
 @app.post("/api/import-legacy")
 @require_auth()
 def import_legacy_state():
@@ -1963,7 +2154,8 @@ def import_legacy_state():
 @require_auth(admin=True)
 def list_users():
     users = User.query.order_by(User.created_at.asc()).all()
-    return jsonify(users=[{"id": u.id, "username": u.username, "role": u.role, "active": u.active, "must_change_password": u.must_change_password, "created_at": u.created_at.isoformat() if u.created_at else None, "signup_source": u.signup_source} for u in users])
+    return jsonify(users=[{"id": u.id, "username": u.username, "role": u.role, "active": u.active, "must_change_password": u.must_change_password, "created_at": u.created_at.isoformat() if u.created_at else None, "signup_source": u.signup_source,
+                         "plan": "plus" if is_plus(u) else "free", "plan_until": u.plan_until.isoformat() if u.plan_until else None, "owner_id": u.owner_id} for u in users])
 
 
 @app.get("/api/signups")
@@ -2036,6 +2228,22 @@ def change_user_status(user_id: int):
     user = db.session.get(User, user_id)
     if not user:
         return jsonify(error="Usuario no encontrado."), 404
+    if "plan" in body:
+        plan = body.get("plan")
+        if plan not in ("free", "plus"):
+            return jsonify(error="El plan debe ser free o plus."), 400
+        try:
+            days = int(body.get("days") or 0)
+        except (TypeError, ValueError):
+            return jsonify(error="days debe ser un número de días."), 400
+        if days < 0 or days > 3660:
+            return jsonify(error="days debe estar entre 0 y 3660 (0 = sin vencimiento)."), 400
+        user.plan = plan
+        user.plan_until = datetime.now(timezone.utc) + timedelta(days=days) if plan == "plus" and days else None
+        db.session.commit()
+        audit("plan_changed", f"Cuenta {user.username}: {plan}" + (f" por {days} días" if plan == "plus" and days else ""), g.user.id)
+        if "active" not in body:
+            return jsonify(ok=True, plan=plan, plan_until=user.plan_until.isoformat() if user.plan_until else None)
     active = body.get("active")
     if not isinstance(active, bool):
         return jsonify(error="Se requiere el estado active true/false."), 400
@@ -2201,6 +2409,7 @@ def delete_account():
     DeviceToken.query.filter_by(user_id=uid).delete()
     UserPasskey.query.filter_by(user_id=uid).delete()
     PushSubscription.query.filter_by(user_id=uid).delete()
+    User.query.filter_by(owner_id=uid).update({"active": False})
     ReminderDelivery.query.filter_by(user_id=uid).delete()
     SharedState.query.filter_by(user_id=uid).delete()
     SharedState.query.filter_by(updated_by=uid).update({"updated_by": None})
