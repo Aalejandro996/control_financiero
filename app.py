@@ -70,6 +70,9 @@ app.config.update(
     SECRET_KEY=os.getenv("APP_SECRET_KEY") or secrets.token_hex(32),
     SQLALCHEMY_DATABASE_URI=database_url(),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    # PostgreSQL de Render corta las conexiones inactivas: se prueba cada una antes de usarla y se renuevan cada 5 minutos,
+    # así no salen errores "SSL error: bad record mac / unexpected eof" ni falla /healthz.
+    SQLALCHEMY_ENGINE_OPTIONS={"pool_pre_ping": True, "pool_recycle": 300},
     # "__Host-" obliga a HTTPS, sin dominio y ruta "/": el navegador la protege mejor.
     SESSION_COOKIE_NAME="__Host-quincena" if os.getenv("COOKIE_SECURE", "true" if os.getenv("RENDER") else "false").lower() == "true" else "quincena_session",
     SESSION_COOKIE_HTTPONLY=True,
@@ -2239,6 +2242,7 @@ with app.app_context():
     db.create_all()
     migrate_user_email()
     migrate_shared_state_schema()
+    db.engine.dispose()  # cada proceso de gunicorn abre sus propias conexiones
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")), debug=False)

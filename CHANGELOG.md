@@ -16,6 +16,10 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
   igual fecha, la del BCV). El paralelo sigue saliendo de dolarapi.
 - Cada consulta queda en el registro de Render: qué dio cada fuente, cuál se usó y, si falló, por qué.
 - `/api/rate` dice de qué fuente salió la tasa (`source`). Pruebas: `tests/rate_test.py`.
+- **Errores de base de datos al despertar el servidor** ("SSL error: decryption failed or bad record mac" y
+  "unexpected eof"): PostgreSQL de Render corta las conexiones inactivas y el servidor reusaba una muerta, con lo que
+  fallaban peticiones y `/healthz`. Ahora cada conexión se prueba antes de usarse (`pool_pre_ping`) y se renueva cada
+  5 minutos.
 
 ## [Sin publicar · Más, más simple] — 26 oct 2026
 
