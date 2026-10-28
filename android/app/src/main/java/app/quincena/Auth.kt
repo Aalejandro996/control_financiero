@@ -55,6 +55,7 @@ fun AuthScreen(st: AppState) {
     var pass by remember { mutableStateOf("") }
     var accept by remember { mutableStateOf(false) }
     var country by remember { mutableStateOf(guessCountry()) }
+    var bizName by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val p = pal
@@ -82,12 +83,14 @@ fun AuthScreen(st: AppState) {
             Title("Quincena VE 🇻🇪", 36.sp)
             Mut(when (mode) {
                 "registro" -> "Crea tu cuenta gratis."
+                "negocio" -> "Crea la cuenta de tu negocio: ventas, fiado y caja en \$ y Bs. con la tasa del día. Gratis."
                 "olvide" -> "Te enviaremos un enlace para elegir una contraseña nueva."
                 else -> "Tus finanzas, solo para ti."
             })
             when (mode) {
-                "registro" -> {
-                    Field("Usuario", user, { user = it })
+                "registro", "negocio" -> {
+                    if (mode == "negocio") Field("Nombre del negocio", bizName, { bizName = it.take(80) }, placeholder = "Bodega Ana")
+                    Field(if (mode == "negocio") "Tu usuario" else "Usuario", user, { user = it })
                     Field("Correo", email, { email = it }, kind = KeyboardType.Email)
                     Select("¿En qué país vives?", COUNTRIES.map { it.code to it.name }, country) { country = it }
                     Field("Contraseña (mínimo 12 caracteres)", pass, { pass = it }, password = true)
@@ -108,13 +111,17 @@ fun AuthScreen(st: AppState) {
             LaunchedEffect(busy) { slow = false; if (busy) { kotlinx.coroutines.delay(4000); slow = true } }
             if (busy && slow) Mut("Conectando… la primera vez puede tardar hasta un minuto mientras el servidor despierta.")
             when (mode) {
-                "registro" -> Btn("Crear mi cuenta", {
+                "registro", "negocio" -> Btn(if (mode == "negocio") "Crear la cuenta del negocio" else "Crear mi cuenta", {
                     when {
+                        mode == "negocio" && bizName.isBlank() -> error = "Escribe el nombre del negocio."
                         user.isBlank() || email.isBlank() -> error = "Completa usuario y correo."
                         pass.length < 12 -> error = "Usa una contraseña de al menos 12 caracteres."
                         pass.lowercase().contains(user.trim().lowercase()) -> error = "La contraseña no debe contener tu nombre de usuario."
                         !accept -> error = "Debes aceptar los términos y la política de privacidad para crear tu cuenta."
-                        else -> submit { st.repo.register(user, email, pass, country) }
+                        else -> submit {
+                            st.repo.register(user, email, pass, country, if (mode == "negocio") bizName else "")
+                            if (mode == "negocio") { st.tab = "negocio"; st.bizSub = "hoy" }
+                        }
                     }
                 }, enabled = !busy)
                 "olvide" -> Btn("Enviarme el enlace", {
@@ -130,7 +137,12 @@ fun AuthScreen(st: AppState) {
                 if (mode == "login") {
                     Link("¿Olvidaste tu contraseña?", { error = null; mode = "olvide" })
                     if (regOpen) Link("Crear una cuenta", { error = null; mode = "registro" })
-                } else Link(if (mode == "registro") "Ya tengo cuenta" else "Volver", { error = null; mode = "login" })
+                    if (regOpen) Link("¿Tienes un negocio? Crea su cuenta", { error = null; mode = "negocio" })
+                } else {
+                    if (mode == "registro") Link("¿Tienes un negocio? Crea su cuenta", { error = null; mode = "negocio" })
+                    if (mode == "negocio") Link("¿Es para ti? Cuenta personal", { error = null; mode = "registro" })
+                    Link(if (mode == "registro" || mode == "negocio") "Ya tengo cuenta" else "Volver", { error = null; mode = "login" })
+                }
                 Link("Leer términos y privacidad", { back = mode; mode = "legal" })
             }
             Text(copyright(), Modifier.fillMaxWidth(), fontSize = 12.sp, color = p.mut, textAlign = androidx.compose.ui.text.style.TextAlign.Center)

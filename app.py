@@ -1768,8 +1768,12 @@ def register():
     record = ensure_user_state(user.id)
     country = clean_country(body.get("country"))
     record.data = {**copy.deepcopy(DEFAULT_SHARED_DATA), "country": country, "exchangeRate": COUNTRIES[country]["rate"]}
+    # Registro "Crea la cuenta de tu negocio": la cuenta nace con el modo Negocio activo.
+    business_name = str(body.get("business_name") or "").strip()[:80]
+    if business_name:
+        record.data["business"] = {"enabled": True, "name": business_name, "phone": ""}
     db.session.commit()
-    audit("account_registered", f"Cuenta creada ({country}, origen {source or 'directo'}); aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
+    audit("account_registered", f"Cuenta creada ({country}, origen {source or 'directo'}{', negocio' if business_name else ''}); aceptó términos, privacidad y cookies (versión 2026-10-23)", user.id)
     send_verification(user)
     return start_session(user)
 

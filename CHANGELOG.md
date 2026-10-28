@@ -23,6 +23,9 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 - **Fase 3 · Equipo y crecimiento:** hasta 5 vendedores por negocio (Plus) con su propio usuario: solo registran
   ventas y la dueña las ve con su nombre. Tarjeta para contratar a Gigadevs. La compilación deja además el AAB para
   Google Play (`android/GOOGLE_PLAY.md`).
+- **Crear la cuenta de un negocio:** pantalla "Crea la cuenta de tu negocio" (web, `/app#negocio`, y app) con el
+  nombre del negocio; la cuenta nace con el modo Negocio activo y abre en la pestaña Negocio. La página de
+  presentación tiene la sección "Quincena VE para tu negocio" y una pregunta frecuente nueva.
 - Servidor: colecciones `business`, `sales`, `bizPayments`, `bizExpenses`, `products`, `cashClosings`; columnas
   `user.plan`, `user.plan_until`, `user.owner_id`; rutas `/api/biz/sellers` y `/api/biz/seller`. Pruebas:
   `tests/negocio_test.py` (38) y `tests/negocio_ui_test.py` (30, en navegador).

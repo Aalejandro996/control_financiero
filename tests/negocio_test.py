@@ -145,6 +145,15 @@ p2 = C()
 code, j = p2.req("POST", "/api/login", {"username": "pedro", "password": "Nueva-Clave-99123x"}, ip="198.51.100.31")
 check("la dueña lo reactiva con contraseña nueva", code == 200, j)
 
+print("== Registro de un negocio ==")
+neg = C()
+code, j = neg.req("POST", "/api/register", {"username": "luis", "email": "luis@x.com", "password": "Zorro-Plata-55231x", "accept_terms": True,
+                                           "business_name": "  Panadería Luis  "}, ip="198.51.100.50")
+code, st = neg.req("GET", "/api/state")
+check("crear la cuenta del negocio la deja con el modo Negocio activo y su nombre", st["data"]["business"] == {"enabled": True, "name": "Panadería Luis", "phone": ""}, st["data"]["business"])
+code, st = otro.req("GET", "/api/state")
+check("una cuenta personal nace sin negocio", st["data"]["business"]["enabled"] is False)
+
 print("== Eliminar la cuenta de la dueña ==")
 code, j = ana.req("DELETE", "/api/account", {"password": "Zorro-Plata-55231x"})
 with A.app.app_context():
