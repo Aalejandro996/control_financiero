@@ -191,16 +191,19 @@ class Repo(ctx: Context) {
     }
 
     /** Actualiza el tipo de cambio del país (BCV en Venezuela). Devuelve el texto para mostrar junto a la tasa. */
-    suspend fun updateRate(): String = try {
-        val r = api.call("GET", "/api/rate?country=" + Loc.code)
+    /** [force] = botón Actualizar: el servidor vuelve a consultar las fuentes (como mucho una vez por minuto). */
+    suspend fun updateRate(force: Boolean = false): String = try {
+        val r = api.call("GET", "/api/rate?country=" + Loc.code + if (force) "&force=1" else "")
         val rate = r["rate"]!!.jsonPrimitive.double
         val market = (r["parallel"] as? JsonPrimitive)?.doubleOrNull
+        val euro = (r["euro"] as? JsonPrimitive)?.doubleOrNull
         val today = java.time.LocalDate.now().toString()
         val last = data.arr("rateHistory").lastOrNull()
         val histOk = last != null && last.str("d") == today && last.num("b") == rate && (market == null || last.num("m") == market)
-        if (rate != rateOf(data) || (market != null && market != marketRateOf(data)) || !histOk) edit {
+        if (rate != rateOf(data) || (market != null && market != marketRateOf(data)) || (euro != null && euro != data.num("euroRate")) || !histOk) edit {
             it["exchangeRate"] = JsonPrimitive(rate)
             if (market != null) it["marketRate"] = JsonPrimitive(market)
+            if (euro != null) it["euroRate"] = JsonPrimitive(euro)
             addRateHistory(it, rate, market)
         }
         val day = dateOf(r.str("updated_at"))

@@ -51,12 +51,33 @@ val BIZ_CATS = linkedMapOf(
 private val BIZ_SUBS = listOf("hoy" to "Hoy", "ventas" to "Ventas", "fiado" to "Fiado", "gastos" to "Gastos", "mes" to "Mes", "productos" to "Productos", "equipo" to "Equipo")
 private val PLUS_SUBS = setOf("productos", "equipo")
 
+// ---------- Tasa del negocio ----------
+
+/** Tasa con la que trabaja el negocio: dólar BCV, euro BCV o USDT (paralelo). */
+val BIZ_RATES = linkedMapOf("bcv_usd" to "BCV dólar", "bcv_eur" to "BCV euro", "usdt" to "USDT")
+fun bizKind(d: JsonObject) = d.obj("business").str("rateKind")?.takeIf { it in BIZ_RATES } ?: "bcv_usd"
+fun bizRateOf(d: JsonObject, k: String) = when (k) { "bcv_eur" -> d.num("euroRate"); "usdt" -> marketRateOf(d); else -> rateOf(d) }
+fun bizRate(d: JsonObject) = bizRateOf(d, bizKind(d)).takeIf { it > 0 } ?: rateOf(d)
+fun bizSym(d: JsonObject) = if (bizKind(d) == "bcv_eur") "€" else "$"
+fun bizCurName(d: JsonObject) = if (bizKind(d) == "bcv_eur") "euros" else "dólares"
+fun divisaLabel(sym: String) = if (sym == "€") "Euros (€)" else "Dólares ($)"
+
+/** Como Fmt, pero la divisa del negocio puede ser el euro (€). */
+class BizFmt(val hide: Boolean, val bs: Boolean, val rate: Double, val sym: String = "$") {
+    private val base = Fmt(hide, bs, rate)
+    fun show(u: Double) = if (hide) "••••" else if (bs) base.show(u) else sym + " " + base.plain(u)
+    fun orig(a: Double, cur: String?) = if (cur == "BS") base.orig(a, "BS") else if (hide) "••••" else sym + " " + base.plain(a)
+    fun plain(v: Double) = base.plain(v)
+}
+
+fun bizFmt(st: AppState) = BizFmt(st.hide, st.fmt.bs, bizRate(st.repo.data), bizSym(st.repo.data))
+
 // ---------- Cálculos ----------
 
 fun bizOn(d: JsonObject) = d.obj("business").bool("enabled") == true
 fun bizUsd(d: JsonObject, x: JsonObject): Double {
     if (x.str("currency") != "BS") return x.num("amount")
-    val r = x.num("rateUsed").takeIf { it > 0 } ?: rateOf(d).takeIf { it > 0 } ?: 1.0
+    val r = x.num("rateUsed").takeIf { it > 0 } ?: bizRate(d).takeIf { it > 0 } ?: 1.0
     return x.num("amount") / r
 }
 fun salePaid(d: JsonObject, s: JsonObject) = d.arr("bizPayments").filter { it.str("saleId") == s.id }.sumOf { bizUsd(d, it) }
@@ -81,7 +102,7 @@ fun bizDay(d: JsonObject, day: LocalDate): BizDay {
     fun add(x: JsonObject, sign: Int) {
         val m = x.str("method") ?: "otro"
         if (sign > 0) inn[m] = (inn[m] ?: 0.0) + bizUsd(d, x)
-        val r = x.num("rateUsed").takeIf { it > 0 } ?: rateOf(d)
+        val r = x.num("rateUsed").takeIf { it > 0 } ?: bizRate(d)
         if (m == "efectivo_bs") cashBs += sign * (if (x.str("currency") == "BS") x.num("amount") else x.num("amount") * r)
         if (m == "efectivo_usd") cashUsd += sign * (if (x.str("currency") == "BS") bizUsd(d, x) else x.num("amount"))
     }
@@ -135,7 +156,7 @@ fun openUrl(ctx: Context, url: String) {
 private fun dayText(s: String?) = localDay(s)?.let { shortDate(it) } ?: ""
 
 fun receiptText(d: JsonObject, s: JsonObject): String {
-    val f = Fmt(false, false, rateOf(d))
+    val f = BizFmt(false, false, bizRate(d), bizSym(d))
     val b = d.obj("business")
     val items = s.arr("items").joinToString("\n") { "${inputMoney(it.num("qty"))} × ${it.str("name")}: ${f.orig(it.num("price") * it.num("qty"), "USD")}" }
     val pend = salePending(d, s)
@@ -157,9 +178,10 @@ fun bizCsv(d: JsonObject, ym: YearMonth): String {
     fun cell(v: String) = if (v.any { it == ';' || it == '"' || it == '\n' }) "\"" + v.replace("\"", "\"\"") + "\"" else v
     fun r2(v: Double) = String.format(java.util.Locale.ROOT, "%.2f", v).replace('.', ',')
     fun inMonth(x: JsonObject) = localDay(x.str("date"))?.let { YearMonth.from(it) == ym } == true
-    fun cur(x: JsonObject) = if (x.str("currency") == "BS") "Bs" else "USD"
+    val dv = if (bizSym(d) == "€") "EUR" else "USD"
+    fun cur(x: JsonObject) = if (x.str("currency") == "BS") "Bs" else dv
     fun rate(x: JsonObject) = x.num("rateUsed").takeIf { it > 0 }?.let { r2(it) } ?: ""
-    val rows = mutableListOf(listOf("Tipo", "Fecha", "Detalle", "Medio", "Moneda", "Monto", "Tasa", "Monto en USD", "Vendedor"))
+    val rows = mutableListOf(listOf("Tipo", "Fecha", "Detalle", "Medio", "Moneda", "Monto", "Tasa", "Monto en $dv", "Vendedor"))
     for (s in d.arr("sales")) if (inMonth(s)) rows.add(listOf(
         if (s.bool("credit") == true) "Venta fiada" else "Venta", localDay(s.str("date")).toString(),
         listOfNotNull(s.str("client"), s.arr("items").joinToString(" + ") { "${inputMoney(it.num("qty"))} ${it.str("name")}" }, s.str("note")).filter { it.isNotBlank() }.joinToString(" · "),
@@ -258,7 +280,7 @@ fun Negocio(st: AppState) {
 @Composable
 private fun RowScope.SaleRow(st: AppState, s: JsonObject, actions: Boolean) {
     val d = st.repo.data
-    val f = st.fmt
+    val f = bizFmt(st)
     val ctx = LocalContext.current
     val pend = salePending(d, s)
     val items = s.arr("items").joinToString(", ") { "${inputMoney(it.num("qty"))} ${it.str("name")}" }
@@ -281,13 +303,13 @@ private fun RowScope.SaleRow(st: AppState, s: JsonObject, actions: Boolean) {
 @Composable
 private fun BizHoy(st: AppState) {
     val d = st.repo.data
-    val f = st.fmt
+    val f = bizFmt(st)
     val today = LocalDate.now()
     val t = bizDay(d, today)
     val last = d.arr("cashClosings").firstOrNull { localDay(it.str("date")) == today }
     val sales = d.arr("sales").filter { localDay(it.str("date")) == today }
-    val other = if (f.bs) Fmt(f.hide, false, f.rate).show(t.sold) else Fmt(f.hide, true, f.rate).show(t.sold)
-    Hero("Vendiste hoy", f.show(t.sold), "${t.n} ${if (t.n == 1) "venta" else "ventas"} · $other a la tasa del día")
+    val other = if (f.bs) BizFmt(f.hide, false, f.rate, f.sym).show(t.sold) else BizFmt(f.hide, true, f.rate, f.sym).show(t.sold)
+    Hero("Vendiste hoy", f.show(t.sold), "${t.n} ${if (t.n == 1) "venta" else "ventas"} · $other a la tasa ${BIZ_RATES[bizKind(d)]}")
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Btn("+ Venta", { st.open("bizventa") }, Modifier.weight(1f))
         Btn("Gasto del negocio", { st.open("bizgasto") }, Modifier.weight(1f), outline = true)
@@ -320,9 +342,9 @@ private fun BizVentas(st: AppState) {
 @Composable
 private fun BizFiado(st: AppState) {
     val d = st.repo.data
-    val f = st.fmt
+    val f = bizFmt(st)
     val ctx = LocalContext.current
-    val rf = Fmt(false, false, rateOf(d))
+    val rf = BizFmt(false, false, bizRate(d), bizSym(d))
     val open = d.arr("sales").filter { salePending(d, it) > .005 }.sortedBy { it.str("dueDate")?.ifBlank { null } ?: it.str("date") ?: "" }
     val name = d.obj("business").str("name")?.ifBlank { null } ?: "mi negocio"
     QCard {
@@ -337,7 +359,7 @@ private fun BizFiado(st: AppState) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (!s.str("phone").isNullOrBlank()) Link("Recordar", {
                     val client = s.str("client")?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""
-                    openUrl(ctx, waLink(s.str("phone"), "Hola$client, te recuerdo el pago pendiente de ${rf.orig(p, "USD")} (${rf.orig(p * rateOf(d), "BS")} a la tasa BCV de hoy) en $name. ¡Gracias!"))
+                    openUrl(ctx, waLink(s.str("phone"), "Hola$client, te recuerdo el pago pendiente de ${rf.orig(p, "USD")} (${rf.orig(p * bizRate(d), "BS")} a la tasa ${BIZ_RATES[bizKind(d)]} de hoy) en $name. ¡Gracias!"))
                 })
                 Btn("Abonó", { st.open("bizabono", s.id) }, small = true)
             }
@@ -348,7 +370,7 @@ private fun BizFiado(st: AppState) {
 @Composable
 private fun BizGastos(st: AppState) {
     val d = st.repo.data
-    val f = st.fmt
+    val f = bizFmt(st)
     val ym = YearMonth.now()
     val rows = d.arr("bizExpenses").filter { localDay(it.str("date"))?.let { x -> YearMonth.from(x) == ym } == true }.sortedByDescending { it.str("date") ?: "" }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -374,7 +396,7 @@ private fun BizGastos(st: AppState) {
 @Composable
 private fun BizMes(st: AppState) {
     val d = st.repo.data
-    val f = st.fmt
+    val f = bizFmt(st)
     val ctx = LocalContext.current
     val ym = YearMonth.now()
     val m = bizMonth(d, ym)
@@ -382,7 +404,7 @@ private fun BizMes(st: AppState) {
         if (uri != null) runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(bizCsv(d, ym).toByteArray()) } }
             .onSuccess { st.toast("Listo: se guardó el Excel del mes.") }.onFailure { st.toast("No pudimos guardar el archivo.") }
     }
-    Hero("Ganancia de ${monthName(ym)}", f.show(m.profit), "Ventas menos compras y gastos, en dólares a la tasa de cada día")
+    Hero("Ganancia de ${monthName(ym)}", f.show(m.profit), "Ventas menos compras y gastos, en ${bizCurName(d)} a la tasa de cada día")
     QCard {
         Line("Ventas (${m.n})", f.show(m.sales))
         Line("Compras de mercancía", f.show(-m.buy))
@@ -405,14 +427,14 @@ private fun BizMes(st: AppState) {
 @Composable
 private fun BizProductos(st: AppState) {
     val d = st.repo.data
-    val f = Fmt(st.hide, false, rateOf(d))
+    val f = BizFmt(st.hide, false, bizRate(d), bizSym(d))
     Btn("+ Producto", { st.open("bizprod") })
     QCard {
-        Items(activeProducts(d), "Agrega lo que vendes con su precio en dólares: al vender lo tocas y se suma solo, en \$ o en Bs.") { p ->
+        Items(activeProducts(d), "Agrega lo que vendes con su precio en ${bizCurName(d)}: al vender lo tocas y se suma solo, en ${bizSym(d)} o en Bs.") { p ->
             val stock = stockOf(d, p)
             Column(Modifier.weight(1f)) {
                 B(p.str("name") ?: "")
-                Text(loc("${f.orig(p.num("price"), "USD")} · ${f.orig(p.num("price") * rateOf(d), "BS")}" +
+                Text(loc("${f.orig(p.num("price"), "USD")} · ${f.orig(p.num("price") * bizRate(d), "BS")}" +
                     (if (p.bool("track") == true) " · quedan ${inputMoney(Math.round(stock * 100) / 100.0).ifEmpty { "0" }}" else "")),
                     color = if (p.bool("track") == true && stock <= 0) pal.bad else pal.mut, fontSize = 14.sp)
             }
@@ -477,9 +499,9 @@ private fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit
 fun SaleEditor(
     products: List<JsonObject>, rate: Double, cart: Map<String, Double>, onCart: (Map<String, Double>) -> Unit,
     accPicker: (@Composable (String, (String) -> Unit) -> Unit)?, initAmount: String = "", initCur: String = "BS", initNote: String = "",
-    saveLabel: String = "Guardar", onCancel: (() -> Unit)? = null, toast: (String) -> Unit, onSave: (JsonObject) -> Unit,
+    saveLabel: String = "Guardar", onCancel: (() -> Unit)? = null, sym: String = "$", toast: (String) -> Unit, onSave: (JsonObject) -> Unit,
 ) {
-    val f = Fmt(false, false, rate)
+    val f = BizFmt(false, false, rate, sym)
     var amount by remember { mutableStateOf(initAmount) }
     var cur by remember { mutableStateOf(initCur) }
     var method by remember { mutableStateOf("pago_movil") }
@@ -513,7 +535,7 @@ fun SaleEditor(
         }
     }
     MoneyField("Monto", amount) { amount = it }
-    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to "Dólares ($)"), cur) { cur = it; refill(it, cart) }
+    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to divisaLabel(sym)), cur) { cur = it; refill(it, cart) }
     Select("¿Cómo te pagaron?", METHOD_OPTS, method) { method = it }
     CheckRow("Es fiado (me paga después)", credit) { credit = it }
     Field("Cliente${if (credit) "" else " (opcional)"}", client, { client = it.take(80) })
@@ -542,14 +564,14 @@ fun VentaForm(st: AppState, arg: String?) {
     val sms = arg?.takeIf { it.startsWith("sms:") }?.split(":")
     BizTitle("Nueva venta")
     SaleEditor(
-        if (st.repo.plus) activeProducts(d) else emptyList(), rateOf(d), st.cart, { st.cart = it },
+        if (st.repo.plus) activeProducts(d) else emptyList(), bizRate(d), st.cart, { st.cart = it },
         { v, on -> AccSelect(st, v, "¿A qué cuenta entró? (opcional)", on) },
         initAmount = sms?.getOrNull(1)?.toDoubleOrNull()?.let { inputMoney(it) } ?: "", initCur = sms?.getOrNull(2) ?: "BS",
-        initNote = if (sms != null) "Pago móvil recibido" else "", onCancel = { st.close() }, toast = { st.toast(it) },
+        initNote = if (sms != null) "Pago móvil recibido" else "", onCancel = { st.close() }, sym = bizSym(d), toast = { st.toast(it) },
     ) { sale ->
         st.close(); st.cart = emptyMap()
         val credit = sale.bool("credit") == true
-        st.act((if (credit) "Fiado anotado: " else "Venta registrada: ") + st.fmt.orig(sale.num("amount"), sale.str("currency")), undo = true) { it.addFirst("sales", sale) }
+        st.act((if (credit) "Fiado anotado: " else "Venta registrada: ") + bizFmt(st).orig(sale.num("amount"), sale.str("currency")), undo = true) { it.addFirst("sales", sale) }
     }
 }
 
@@ -559,18 +581,23 @@ fun BizConfForm(st: AppState) {
     val on = bizOn(st.repo.data)
     var name by remember { mutableStateOf(b.str("name") ?: "") }
     var phone by remember { mutableStateOf(b.str("phone") ?: "") }
+    var kind by remember { mutableStateOf(bizKind(st.repo.data)) }
+    val rf = Fmt(false, false, 1.0)
     BizTitle("Mi negocio")
     Field("Nombre del negocio", name, { name = it.take(80) }, placeholder = "Bodega Ana")
     Field("WhatsApp del negocio (opcional, sale en los recibos)", phone, { phone = it.take(30) }, kind = KeyboardType.Phone)
+    Select("¿Con qué tasa trabaja tu negocio?", BIZ_RATES.entries.map { (k, l) ->
+        k to l + (bizRateOf(st.repo.data, k).takeIf { it > 0 }?.let { " · Bs. ${rf.plain(it)}" } ?: " · aún sin dato") }, kind) { kind = it }
+    Mut("Las ventas, los precios y los totales del negocio se convierten con esta tasa. Con el euro BCV los montos se muestran en €.")
     Mut("Las ventas y gastos del negocio van aparte: no se mezclan con tu quincena ni tu presupuesto. Quincena VE no emite facturas fiscales.")
     if (on) OutlineDanger("Ocultar el modo Negocio") {
         st.close(); st.go("mas")
-        st.act("Modo Negocio oculto. Tus datos del negocio se guardan.") { it["business"] = row("enabled" to false, "name" to name.trim(), "phone" to phone.trim()) }
+        st.act("Modo Negocio oculto. Tus datos del negocio se guardan.") { it["business"] = row("enabled" to false, "name" to name.trim(), "phone" to phone.trim(), "rateKind" to kind) }
     }
     BizFooter(st, {
         if (name.isBlank()) return@BizFooter st.toast("Escribe el nombre del negocio.")
         st.close(); st.go("negocio"); st.bizSub = "hoy"
-        st.act(if (on) "Guardado" else "Listo: tu negocio está activo.") { it["business"] = row("enabled" to true, "name" to name.trim(), "phone" to phone.trim()) }
+        st.act(if (on) "Guardado" else "Listo: tu negocio está activo.") { it["business"] = row("enabled" to true, "name" to name.trim(), "phone" to phone.trim(), "rateKind" to kind) }
     }, if (on) "Guardar" else "Activar mi negocio")
 }
 
@@ -585,7 +612,7 @@ fun BizGastoForm(st: AppState) {
     var acc by remember { mutableStateOf("") }
     BizTitle("Gasto del negocio")
     MoneyField("Monto", amount) { amount = it }
-    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to "Dólares ($)"), cur) { cur = it }
+    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to divisaLabel(bizSym(st.repo.data))), cur) { cur = it }
     Select("Tipo", BIZ_CATS.entries.map { it.key to it.value }, cat) { cat = it }
     Select("¿Cómo pagaste?", METHOD_OPTS, method) { method = it }
     Field("Proveedor (opcional)", supplier, { supplier = it.take(80) })
@@ -597,7 +624,7 @@ fun BizGastoForm(st: AppState) {
         st.act("Gasto del negocio anotado") { m ->
             m.addFirst("bizExpenses", row("id" to bizId("g"), "date" to nowIso(), "amount" to a, "currency" to cur, "category" to cat, "method" to method,
                 "supplier" to supplier.trim().ifBlank { null }, "description" to note.trim().ifBlank { null }, "accountId" to acc.ifBlank { null },
-                "rateUsed" to (if (cur == "BS") rateOf(m.data()) else null)))
+                "rateUsed" to (if (cur == "BS") bizRate(m.data()) else null)))
         }
     })
 }
@@ -612,7 +639,7 @@ fun BizRetiroForm(st: AppState) {
     BizTitle("Me pago a mí")
     Mut("Pasa dinero del negocio a tu quincena personal: sale del negocio como \"te pagaste\" y entra como ingreso tuyo.")
     MoneyField("Monto", amount) { amount = it }
-    Select("Moneda", listOf("USD" to "Dólares ($)", "BS" to "Bolívares (Bs.)"), cur) { cur = it }
+    Select("Moneda", listOf("USD" to divisaLabel(bizSym(st.repo.data)), "BS" to "Bolívares (Bs.)"), cur) { cur = it }
     Select("¿Cómo lo sacaste?", METHOD_OPTS, method) { method = it }
     AccSelect(st, from, "¿De qué cuenta sale? (opcional)") { from = it }
     AccSelect(st, to, "¿A qué cuenta tuya entra? (opcional)") { to = it }
@@ -622,8 +649,10 @@ fun BizRetiroForm(st: AppState) {
         st.close()
         st.act("Listo: pasó a tu quincena") { m ->
             m.addFirst("bizExpenses", row("id" to id, "date" to nowIso(), "amount" to a, "currency" to cur, "category" to "retiro", "method" to method,
-                "description" to "Me pagué", "accountId" to from.ifBlank { null }, "rateUsed" to (if (cur == "BS") rateOf(m.data()) else null)))
-            m.addFirst("incomes", row("id" to id + "_in", "date" to nowIso(), "amount" to a, "currency" to cur, "name" to "Me pagué del negocio",
+                "description" to "Me pagué", "accountId" to from.ifBlank { null }, "rateUsed" to (if (cur == "BS") bizRate(m.data()) else null)))
+            // Con el euro BCV la divisa del negocio son euros: a la quincena entra su equivalente en dólares.
+            val personal = if (cur == "USD" && bizKind(m.data()) == "bcv_eur") Math.round(a * bizRate(m.data()) / (rateOf(m.data()).takeIf { it > 0 } ?: 1.0) * 100) / 100.0 else a
+            m.addFirst("incomes", row("id" to id + "_in", "date" to nowIso(), "amount" to personal, "currency" to cur, "name" to "Me pagué del negocio",
                 "kind" to "negocio", "accountId" to to.ifBlank { null }))
         }
     })
@@ -632,7 +661,7 @@ fun BizRetiroForm(st: AppState) {
 @Composable
 fun BizCierreForm(st: AppState) {
     val d = st.repo.data
-    val f = Fmt(false, false, rateOf(d))
+    val f = BizFmt(false, false, bizRate(d), bizSym(d))
     val t = bizDay(d, LocalDate.now())
     var bs by remember { mutableStateOf("") }
     var usd by remember { mutableStateOf("") }
@@ -660,27 +689,27 @@ fun BizCierreForm(st: AppState) {
 fun BizAbonoForm(st: AppState, saleId: String) {
     val d = st.repo.data
     val s = d.arr("sales").firstOrNull { it.id == saleId } ?: return
-    val f = Fmt(false, false, rateOf(d))
+    val f = BizFmt(false, false, bizRate(d), bizSym(d))
     val pend = salePending(d, s)
     val c0 = s.str("currency") ?: "USD"
-    var amount by remember { mutableStateOf(inputMoney(Math.round((if (c0 == "BS") pend * rateOf(d) else pend) * 100) / 100.0)) }
+    var amount by remember { mutableStateOf(inputMoney(Math.round((if (c0 == "BS") pend * bizRate(d) else pend) * 100) / 100.0)) }
     var cur by remember { mutableStateOf(c0) }
     var method by remember { mutableStateOf(if (c0 == "BS") "pago_movil" else "efectivo_usd") }
     var acc by remember { mutableStateOf("") }
     BizTitle("${s.str("client")?.ifBlank { null } ?: "El cliente"} abonó")
-    Mut("Debe ${f.orig(pend, "USD")} (${f.orig(pend * rateOf(d), "BS")} a la tasa de hoy).")
+    Mut("Debe ${f.orig(pend, "USD")} (${f.orig(pend * bizRate(d), "BS")} a la tasa de hoy).")
     MoneyField("Monto", amount) { amount = it }
-    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to "Dólares ($)"), cur) { cur = it }
+    Select("Moneda", listOf("BS" to "Bolívares (Bs.)", "USD" to divisaLabel(bizSym(st.repo.data))), cur) { cur = it }
     Select("¿Cómo te pagó?", METHOD_OPTS, method) { method = it }
     AccSelect(st, acc, "¿A qué cuenta entró? (opcional)") { acc = it }
     BizFooter(st, {
         val a = money(amount) ?: return@BizFooter st.toast("Escribe un monto mayor a cero.")
-        val u = if (cur == "BS") a / (rateOf(d).takeIf { it > 0 } ?: 1.0) else a
+        val u = if (cur == "BS") a / (bizRate(d).takeIf { it > 0 } ?: 1.0) else a
         if (u > pend + .01) return@BizFooter st.toast("Es más de lo que debe. Baja el monto.")
         st.close()
         st.act("Abono anotado") { m ->
             m.addFirst("bizPayments", row("id" to bizId("a"), "saleId" to s.id, "date" to nowIso(), "amount" to a, "currency" to cur, "method" to method,
-                "accountId" to acc.ifBlank { null }, "rateUsed" to (if (cur == "BS") rateOf(m.data()) else null)))
+                "accountId" to acc.ifBlank { null }, "rateUsed" to (if (cur == "BS") bizRate(m.data()) else null)))
         }
     })
 }
@@ -696,8 +725,8 @@ fun BizProdForm(st: AppState, id: String?) {
     var stock by remember { mutableStateOf(if (p != null && p.bool("track") == true) inputMoney(Math.round(stockOf(d, p) * 100) / 100.0) else "") }
     BizTitle(if (p == null) "Nuevo producto" else "Editar producto")
     Field("Nombre", name, { name = it.take(80) })
-    MoneyField("Precio de venta en dólares", price) { price = it }
-    MoneyField("Lo que te cuesta en dólares (opcional, para saber tu ganancia)", cost) { cost = it }
+    MoneyField("Precio de venta en ${bizCurName(d)}", price) { price = it }
+    MoneyField("Lo que te cuesta en ${bizCurName(d)} (opcional, para saber tu ganancia)", cost) { cost = it }
     CheckRow("Llevar la cuenta de cuántos quedan", track) { track = it }
     if (track) MoneyField("¿Cuántos tienes ahora?", stock) { stock = it }
     if (p != null) OutlineDanger("Quitar del catálogo") { st.close(); st.act("Producto quitado del catálogo") { m -> m.updateRow("products", p.id) { it.plusFields("archived" to true) } } }
@@ -788,7 +817,7 @@ fun SellerScreen(st: AppState, resumes: Int) {
                 return@Column
             }
             val rate = h.num("rate")
-            val f = Fmt(false, false, rate)
+            val f = BizFmt(false, false, rate, if (h.str("rateKind") == "bcv_eur") "€" else "$")
             val today = LocalDate.now()
             val todays = mine.filter { localDay(it.str("date")) == today }
             val tot = todays.sumOf { if (it.str("currency") == "BS") it.num("amount") / (it.num("rateUsed").takeIf { r -> r > 0 } ?: rate.takeIf { r -> r > 0 } ?: 1.0) else it.num("amount") }
@@ -796,7 +825,7 @@ fun SellerScreen(st: AppState, resumes: Int) {
             QCard {
                 B("Nueva venta")
                 key(formKey) {
-                    SaleEditor(h.arr("products"), rate, cart, { cart = it }, null, saveLabel = "Registrar venta", toast = { st.toast(it) }) { sale ->
+                    SaleEditor(h.arr("products"), rate, cart, { cart = it }, null, saveLabel = "Registrar venta", sym = f.sym, toast = { st.toast(it) }) { sale ->
                         st.scope.launch {
                             try {
                                 val saved = repo.sellerSale(sale.plusFields("id" to null, "date" to null, "rateUsed" to null, "accountId" to null))

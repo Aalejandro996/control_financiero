@@ -139,6 +139,7 @@ class AppState(val repo: Repo, val scope: CoroutineScope, val snack: SnackbarHos
     var calYm by mutableStateOf(java.time.YearMonth.now())
     var calDay by mutableIntStateOf(0)
     var bizSub by mutableStateOf("hoy")
+    var rating by mutableStateOf(false)
     var cart by mutableStateOf(mapOf<String, Double>())
     var sellersVer by mutableIntStateOf(0)
 

@@ -138,8 +138,20 @@ fun Inicio(st: AppState) {
             }
             if (cp.due > 0) Text("Ya descontado: ${f.show(cp.due)} en pagos de este periodo", fontSize = 13.sp)
             val mk = marketRateOf(d)
-            Text(loc("BCV Bs. ${f.plain(rateOf(d))}${if (mk > 0) " · USDT Bs. ${f.plain(mk)}" else ""}${if (st.rateInfo == "sin actualizar") " · sin actualizar" else ""}"),
-                fontSize = 12.5.sp, color = Color.White.copy(alpha = .8f), maxLines = 1)
+            val eu = d.num("euroRate")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(loc("BCV Bs. ${f.plain(rateOf(d))}${if (mk > 0) " · USDT Bs. ${f.plain(mk)}" else ""}${if (eu > 0) " · € Bs. ${f.plain(eu)}" else ""}" +
+                    (st.rateInfo?.let { " · $it" } ?: "")), Modifier.weight(1f), fontSize = 12.5.sp, color = Color.White.copy(alpha = .8f), maxLines = 2)
+                // Botón discreto para pedir la tasa al momento.
+                Text(if (st.rating) "Actualizando…" else "Actualizar", Modifier.padding(start = 8.dp).clickable(enabled = !st.rating) {
+                    st.scope.launch {
+                        st.rating = true
+                        val info = st.repo.updateRate(force = true)
+                        st.rateInfo = info; st.rating = false
+                        st.toast(if (info == "sin actualizar") "No pudimos actualizar la tasa. Inténtalo en un minuto." else "Tasa ${Loc.cur.official}: ${Loc.cur.sym} ${f.local(rateOf(st.repo.data))} ($info)")
+                    }
+                }, fontSize = 12.5.sp, color = Color.White, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline)
+            }
         }
     }
 
