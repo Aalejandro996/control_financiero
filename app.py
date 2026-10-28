@@ -2320,6 +2320,22 @@ def _http_text(url: str, context: ssl.SSLContext | None = None) -> str:
 _BCV_CONTEXT: ssl.SSLContext | None = None
 
 
+def _load_certs(raw: bytes) -> list:
+    """Certificados de un archivo de "CA Issuers": X.509 (DER o PEM) o un paquete PKCS#7 (.p7c), como el del BCV."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import pkcs7
+    pem = raw.lstrip().startswith(b"-----")
+    for load in ((x509.load_pem_x509_certificate,) if pem else (x509.load_der_x509_certificate,)):
+        try:
+            return [load(raw)]
+        except ValueError:
+            pass
+    certs = pkcs7.load_pem_pkcs7_certificates(raw) if pem else pkcs7.load_der_pkcs7_certificates(raw)
+    if not certs:
+        raise ValueError("el archivo del intermedio no trae certificados")
+    return list(certs)
+
+
 def _bcv_context() -> ssl.SSLContext:
     """El sitio del BCV no envía su certificado intermedio y la verificación falla ("unable to get local issuer").
     Se descarga el intermedio desde la dirección que trae su propio certificado (AIA) y se suma a los de confianza
@@ -2342,8 +2358,9 @@ def _bcv_context() -> ssl.SSLContext:
             break
         with urllib.request.urlopen(urllib.request.Request(urls[0], headers={"User-Agent": "Quincena/1.0"}), timeout=8) as response:
             raw = response.read()
-        cert = x509.load_der_x509_certificate(raw) if not raw.lstrip().startswith(b"-----") else x509.load_pem_x509_certificate(raw)
-        chain.append(cert.public_bytes(Encoding.PEM).decode())
+        certs = _load_certs(raw)
+        chain.extend(c.public_bytes(Encoding.PEM).decode() for c in certs)
+        cert = certs[-1]
     if not chain:
         raise ValueError("el certificado del BCV no indica de dónde bajar su intermedio")
     context = ssl.create_default_context()

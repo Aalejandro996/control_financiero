@@ -119,6 +119,22 @@ check("y lo registra como error", any(line.startswith("ERROR Tasa VE sin actuali
 SRC.update(api=api(1e9, "2026-10-30T00:00:00Z"), bcv=bcv_page("0,00", "2026-10-30T00:00:00-04:00")); A._RATE_CACHE["VE"].update(fetched=0)
 check("descarta tasas absurdas", A.fetch_rate("VE")["rate"] == 214.0)
 
+print("== Formatos del certificado intermedio ==")
+import datetime as _dt
+from cryptography import x509 as _x509
+from cryptography.x509.oid import NameOID as _N
+from cryptography.hazmat.primitives import hashes as _h, serialization as _s
+from cryptography.hazmat.primitives.asymmetric import ec as _ec
+from cryptography.hazmat.primitives.serialization import pkcs7 as _p7
+_k = _ec.generate_private_key(_ec.SECP256R1()); _n = _x509.Name([_x509.NameAttribute(_N.COMMON_NAME, "Intermedio de prueba")])
+_now = _dt.datetime.now(_dt.timezone.utc)
+_c = _x509.CertificateBuilder().subject_name(_n).issuer_name(_n).public_key(_k.public_key()).serial_number(1).not_valid_before(_now) \
+    .not_valid_after(_now + _dt.timedelta(days=1)).sign(_k, _h.SHA256())
+for _name, _raw in (("DER", _c.public_bytes(_s.Encoding.DER)), ("PEM", _c.public_bytes(_s.Encoding.PEM)),
+                    ("PKCS#7 DER (.p7c, como el del BCV)", _p7.serialize_certificates([_c], _s.Encoding.DER)),
+                    ("PKCS#7 PEM", _p7.serialize_certificates([_c], _s.Encoding.PEM))):
+    check(f"lee el intermedio en {_name}", A._load_certs(_raw) == [_c])
+
 print("== Euro y Actualizar ==")
 c = fresh(api(200.0, "2026-10-20T16:00:00.000Z"), bcv_page("215,50", "2026-10-28T00:00:00-04:00", euro="248,30"))
 check("guarda el euro BCV", c["euro"] == 248.3, c)

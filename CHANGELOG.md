@@ -14,7 +14,7 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 - **La tasa se quedaba en la del día anterior:** dolarapi tarda en recoger la tasa que el BCV publica en la tarde y
   la consulta directa a bcv.org.ve fallaba siempre ("unable to get local issuer certificate": el sitio no envía su
   certificado intermedio). Ahora el servidor baja ese intermedio desde la dirección que trae el propio certificado
-  del BCV y verifica la cadena completa. La web vuelve a pedir la tasa al volver a la pestaña tras 30 minutos.
+  del BCV (viene como paquete PKCS#7, .p7c) y verifica la cadena completa. La web vuelve a pedir la tasa al volver a la pestaña tras 30 minutos.
 
 ### Agregado
 - **Botón "Actualizar"** discreto junto a la tasa en Inicio: la vuelve a pedir al momento (`/api/rate?force=1`, como
