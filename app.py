@@ -1737,7 +1737,9 @@ def reset_email(username: str, link: str, validity: str = "60 minutos", intro: s
         f'<p style="margin:0 0 16px">{html_escape(intro)}</p>'
         f'<p style="margin:0 0 24px">Para continuar, presione el siguiente botón. El enlace tiene una validez de <b>{validity}</b> y solo podrá utilizarse una vez.</p>'
         + email_button(link, cta) +
-        f'<p style="margin:0 0 16px;padding:12px 14px;background:#F5FAF7;border-radius:10px;font-size:13px;color:#46564E">Si el botón no funciona, copie y pegue esta dirección en su navegador:<br><span style="word-break:break-all;color:#0B6B4D">{url}</span></p>'
+        # Brevo cambia el enlace del botón por uno suyo de rastreo (sendibt3.com) y algunos teléfonos o redes lo bloquean
+        # («No se puede acceder a este sitio»). La dirección escrita como texto no se cambia: el correo la vuelve tocable y abre directo.
+        f'<p style="margin:0 0 16px;padding:14px 16px;background:#F5FAF7;border:1px solid #D5E3DA;border-radius:10px;font-size:14px;color:#46564E">Si al tocar el botón aparece «No se puede acceder a este sitio», toque o copie esta dirección:<br><span style="display:block;margin-top:8px;word-break:break-all;color:#0B6B4D;font-size:15px;font-weight:bold">{url}</span></p>'
         f'<p style="margin:0 0 16px">{html_escape(ignore)}</p>'
         '<p style="margin:0">Atentamente,<br><b>El equipo de Quincena VE</b></p>'
     )
