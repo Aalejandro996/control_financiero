@@ -8,6 +8,10 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## Presentación renovada
+- Página principal con estilo y animaciones tipo Apple, con los mismos colores: menú translúcido, títulos grandes, secciones que aparecen al bajar, teléfono que se endereza y montos que cuentan.
+- Sección completa del negocio: qué incluye, cómo empezar en tres pasos, comparación Gratis vs Plus, preguntas nuevas y botón de cuenta de negocio al final.
+
 ## [Sin publicar · tasa BCV del sitio oficial, euro y tasa del negocio] — 28 oct 2026
 
 ### Corregido

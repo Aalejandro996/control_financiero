@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0B6B4D">
 <title>Quincena VE: app gratis para controlar tus gastos en dólares y bolívares</title>
-<meta name="description" content="Quincena VE es una app gratis de finanzas personales para quien cobra por quincena o por semana. Registra gastos en dólares y moneda local con la tasa BCV del día, controla deudas y cobros, y mira cuánto te queda hasta el próximo pago. Web y Android.">
+<meta name="description" content="Quincena VE es una app gratis de finanzas personales para quien cobra por quincena o por semana. Registra gastos en dólares y moneda local con la tasa BCV del día, controla deudas y cobros, y mira cuánto te queda hasta el próximo pago. Con modo Negocio para ventas, fiado y caja. Web y Android.">
 <link rel="canonical" href="https://control-financiero-wrm5.onrender.com/">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
@@ -56,6 +56,9 @@
       "mainEntity": [
         { "@type": "Question", "name": "¿Quincena VE es gratis?", "acceptedAnswer": { "@type": "Answer", "text": "Sí. Crear tu cuenta y usar Quincena VE en la web y en Android es gratis, también el modo Negocio. Negocio Plus (productos con inventario, recibos, Excel para el contador y vendedores) es un plan de pago que se pide por WhatsApp." } },
         { "@type": "Question", "name": "¿Sirve para mi negocio?", "acceptedAnswer": { "@type": "Answer", "text": "Sí. Con el modo Negocio anotas ventas en bolívares y dólares con la tasa del día, el fiado de tus clientes, los gastos del negocio y el cierre de caja, aparte de tu quincena personal. Quincena VE lleva tus cuentas; no emite facturas fiscales." } },
+        { "@type": "Question", "name": "¿Puedo tener mi negocio y mis finanzas personales en la misma cuenta?", "acceptedAnswer": { "@type": "Answer", "text": "Sí. El modo Negocio va aparte de tu quincena: sus ventas y gastos no se mezclan con tu presupuesto personal. Cuando te pagas a ti mismo desde el negocio, ese dinero entra como ingreso a tu quincena." } },
+        { "@type": "Question", "name": "¿Con qué tasa trabaja mi negocio?", "acceptedAnswer": { "@type": "Answer", "text": "Tú eliges: dólar BCV, euro BCV o USDT. Las ventas, los precios y los totales del negocio se convierten con esa tasa; con el euro BCV los montos se muestran en euros." } },
+        { "@type": "Question", "name": "¿Mis vendedores ven mis ganancias?", "acceptedAnswer": { "@type": "Answer", "text": "No. Con Negocio Plus cada vendedor entra con su propio usuario y solo puede registrar ventas. Tú ves sus ventas con su nombre y puedes quitarle el acceso cuando quieras." } },
         { "@type": "Question", "name": "¿Qué tasa de cambio usa?", "acceptedAnswer": { "@type": "Answer", "text": "En Venezuela usa la tasa oficial del BCV, que se actualiza sola, y si quieres también la tasa USDT. En Colombia, Chile, Perú, México y Argentina usa el tipo de cambio oficial de cada país. Cada gasto guarda la tasa del día en que lo registraste." } },
         { "@type": "Question", "name": "¿Tengo que dar permiso para que lea mis mensajes del banco?", "acceptedAnswer": { "@type": "Answer", "text": "No. En Android tú decides qué compartir: mantienes presionado el mensaje del banco o del pago móvil y eliges Compartir › Quincena VE. La app no lee tus mensajes por su cuenta." } },
         { "@type": "Question", "name": "¿Funciona en iPhone?", "acceptedAnswer": { "@type": "Answer", "text": "Sí, desde el navegador. En Safari puedes agregarla a tu pantalla de inicio para abrirla como una app. La app nativa por ahora es solo para Android." } },
@@ -66,164 +69,200 @@
   ]
 }
 </script>
+<script>document.documentElement.classList.add('js')</script>
 <style>
-:root{--bg:#F3F6F2;--ink:#12211B;--mut:#46564E;--g:#0B6B4D;--g2:#12936A;--mint:#BFF0D8;--gs:#E3F1EA;--line:#D5DDD7;--card:#fff;--shadow:0 18px 50px rgba(11,107,77,.12)}
+:root{--bg:#F3F6F2;--ink:#12211B;--mut:#46564E;--g:#0B6B4D;--g2:#12936A;--mint:#BFF0D8;--gs:#E3F1EA;--line:#D5DDD7;--card:#fff;--shadow:0 18px 50px rgba(11,107,77,.12);--ease:cubic-bezier(.2,.7,.2,1)}
 @media(prefers-color-scheme:dark){:root{--bg:#0E1512;--ink:#EAF1EC;--mut:#A9B8AF;--g:#4FC79C;--gs:#173226;--line:#2A3A32;--card:#16211C;--shadow:0 18px 50px rgba(0,0,0,.35)}}
-*{box-sizing:border-box}html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 Figtree,system-ui,sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 Figtree,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 a{color:var(--g)}img{max-width:100%}
-h1,h2,h3{font-family:'Bricolage Grotesque',sans-serif;line-height:1.08;margin:0;letter-spacing:-.5px}
-.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 24px;border-radius:14px;font-weight:700;text-decoration:none;border:2px solid transparent;transition:transform .15s}
-.btn:hover{transform:translateY(-1px)}
+h1,h2,h3{font-family:'Bricolage Grotesque',sans-serif;line-height:1.05;margin:0;letter-spacing:-.02em}
+.wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+/* Botones en píldora, como en Apple */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 26px;border-radius:999px;font-weight:700;text-decoration:none;border:2px solid transparent;transition:transform .35s var(--ease),box-shadow .35s var(--ease),background .25s}
+.btn:hover{transform:translateY(-2px) scale(1.02);box-shadow:0 10px 26px rgba(11,107,77,.22)}
 .btn.p{background:#0B6B4D;color:#fff}.btn.l{background:#fff;color:#0B6B4D}.btn.o{border-color:currentColor;color:var(--g)}
-.btn.w{border-color:rgba(255,255,255,.6);color:#fff}
-/* Encabezado */
-header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
-.nav{display:flex;align-items:center;justify-content:space-between;height:66px;gap:16px}
-.brand{display:flex;align-items:center;gap:10px;font:700 24px 'Bricolage Grotesque',sans-serif;color:var(--ink);text-decoration:none}
-.brand img{width:38px;height:38px;border-radius:11px}
-.links{display:none;gap:24px;font-weight:600;font-size:15px}.links a{color:var(--mut);text-decoration:none}.links a:hover{color:var(--g)}
-.navcta{display:flex;gap:8px}.navcta .btn{min-height:42px;padding:0 16px;font-size:15px}
+.btn.w{border-color:rgba(255,255,255,.6);color:#fff}.btn.w:hover{background:rgba(255,255,255,.12)}
+.more{font-weight:700;text-decoration:none;color:var(--g)}.more::after{content:" ›";transition:margin .3s var(--ease)}.more:hover::after{margin-left:4px}
+/* Menú translúcido */
+header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 72%,transparent);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.nav{display:flex;align-items:center;justify-content:space-between;height:58px;gap:16px}
+.brand{display:flex;align-items:center;gap:10px;font:700 21px 'Bricolage Grotesque',sans-serif;color:var(--ink);text-decoration:none;white-space:nowrap}
+.brand img{width:32px;height:32px;border-radius:9px}
+.links{display:none;gap:26px;font-weight:500;font-size:14px}.links a{color:var(--mut);text-decoration:none;transition:color .2s}.links a:hover{color:var(--ink)}
+.navcta{display:flex;gap:8px}.navcta .btn{min-height:38px;padding:0 16px;font-size:14px}
+.links a,.navcta .btn{white-space:nowrap}
 /* Portada */
-.hero{background:linear-gradient(150deg,#12936A,#0B6B4D);color:#fff;position:relative;overflow:hidden}
-.hero::after{content:"";position:absolute;right:-180px;top:-200px;width:560px;height:560px;border-radius:50%;background:rgba(255,255,255,.07)}
-.hgrid{display:grid;gap:40px;padding:56px 0 64px;position:relative;z-index:1}
+.hero{background:linear-gradient(160deg,#12936A,#0B6B4D 70%);color:#fff;position:relative;overflow:hidden;text-align:center;padding:0}
+.hero::before,.hero::after{content:"";position:absolute;border-radius:50%;background:rgba(255,255,255,.07);pointer-events:none}
+.hero::before{width:720px;height:720px;left:-260px;top:-320px}.hero::after{width:560px;height:560px;right:-200px;bottom:-260px}
+.hin{position:relative;z-index:1;padding-top:76px}
 .kick{display:inline-block;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);padding:6px 14px;border-radius:999px;font-weight:600;font-size:14px}
-.hero h1{font-size:clamp(38px,6vw,64px);margin:18px 0 16px}.hero h1 em{font-style:normal;color:var(--mint)}
-.hero p.lead{font-size:clamp(18px,2.2vw,21px);color:#E3F1EA;max-width:560px;margin:0 0 28px}
-.ctas{display:flex;flex-wrap:wrap;gap:12px}
-.trust{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:26px;font-size:15px;color:#E3F1EA}.trust span::before{content:"✓ ";color:var(--mint);font-weight:700}
-.phone{background:#fff;color:#12211B;border-radius:30px;padding:24px;box-shadow:0 30px 70px rgba(0,0,0,.28);max-width:380px;margin:0 auto;width:100%}
-.phone small{display:block;color:#46564E;font-weight:600}.phone .big{font:700 52px 'Bricolage Grotesque',sans-serif;margin:2px 0 14px}
-.bar{height:14px;border-radius:7px;background:#E3F1EA;overflow:hidden;margin-bottom:12px}.bar i{display:block;width:62%;height:100%;background:#0B6B4D}
+.hero h1{font-size:clamp(44px,8vw,96px);margin:20px auto 18px;max-width:14ch}.hero h1 em{font-style:normal;color:var(--mint);display:block}
+.hero p.lead{font-size:clamp(18px,2.3vw,23px);color:#E3F1EA;max-width:640px;margin:0 auto 30px}
+.ctas{display:flex;flex-wrap:wrap;gap:12px}.hero .ctas{justify-content:center}
+.trust{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 22px;margin-top:22px;font-size:15px;color:#E3F1EA}.trust span::before{content:"✓ ";color:var(--mint);font-weight:700}
+.stage{perspective:1400px;padding:56px 0 0;margin-bottom:-90px}
+.phone{background:#fff;color:#12211B;border-radius:34px;padding:26px;box-shadow:0 40px 90px rgba(0,0,0,.30);max-width:390px;margin:0 auto;width:100%;text-align:left;transform-origin:50% 100%;will-change:transform}
+.phone small{display:block;color:#46564E;font-weight:600}.phone .big{font:700 54px 'Bricolage Grotesque',sans-serif;margin:2px 0 14px;font-variant-numeric:tabular-nums}
+.bar{height:14px;border-radius:7px;background:#E3F1EA;overflow:hidden;margin-bottom:12px}.bar i{display:block;width:62%;height:100%;background:#0B6B4D;transform-origin:left;transition:transform 1.4s var(--ease) .3s}
+.js .bar i{transform:scaleX(0)}.js .in .bar i,.js .bar.in i{transform:scaleX(1)}
 .row{display:flex;justify-content:space-between;padding:12px 0;border-top:1px solid #E6ECE7;font-size:16px}.row b{font-weight:700}
 .tag{font-size:12px;background:#E3F1EA;color:#0B6B4D;border-radius:999px;padding:2px 9px;font-weight:700;margin-left:6px}
 .note{font-size:12px;color:#46564E;margin-top:8px}
+/* Elige: para ti o para tu negocio */
+.choose{position:relative;z-index:2;padding:140px 0 20px}
+.duo{display:grid;gap:18px}
+.pick{display:block;border-radius:28px;padding:30px;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);transition:transform .5s var(--ease),box-shadow .5s var(--ease)}
+.pick:hover{transform:translateY(-6px);box-shadow:0 30px 70px rgba(11,107,77,.18)}
+.pick .lbl{color:var(--g);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:1.5px}
+.pick h3{font-size:clamp(26px,3.4vw,36px);margin:10px 0 10px}.pick p{color:var(--mut);margin:0 0 18px}
+.pick.biz{background:linear-gradient(160deg,#12936A,#0B6B4D);color:#fff;border-color:transparent}.pick.biz .lbl{color:var(--mint)}.pick.biz p{color:#E3F1EA}.pick.biz .more{color:#fff}
 /* Secciones */
-section{padding:72px 0}
-.sh{max-width:700px;margin:0 0 36px}.sh .eyebrow{color:var(--g);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:1.5px}
-.sh h2{font-size:clamp(30px,4.2vw,44px);margin:10px 0 12px}.sh p{color:var(--mut);margin:0;font-size:18px}
+section{padding:96px 0}
+.sh{max-width:760px;margin:0 0 44px}.sh.c{margin-left:auto;margin-right:auto;text-align:center}
+.eyebrow{color:var(--g);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:1.5px}
+.sh h2{font-size:clamp(34px,5.4vw,60px);margin:10px 0 14px}.sh p{color:var(--mut);margin:0;font-size:clamp(18px,2vw,21px)}
 .grid{display:grid;gap:18px}
-.bizlink{display:inline-block;margin:18px 0 4px;padding:12px 18px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.35);color:#fff;text-decoration:none;font-size:16px;line-height:1.4}.bizlink:hover{background:rgba(255,255,255,.22)}
-@media(max-width:959px){.navcta .biz{display:none}}
-.negt{font-size:clamp(30px,4.4vw,48px);margin:12px 0 16px}.negt em{font-style:normal;color:var(--g)}
-.links a,.navcta .btn{white-space:nowrap}
-.blist{padding-left:20px;margin:18px 0 6px;display:grid;gap:8px;line-height:1.5}
-.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:var(--shadow)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:26px;padding:28px;box-shadow:var(--shadow);transition:transform .5s var(--ease),box-shadow .5s var(--ease)}
+.card:hover{transform:translateY(-4px);box-shadow:0 28px 64px rgba(11,107,77,.16)}
 .card h3{font-size:22px;margin:14px 0 8px}.card p{color:var(--mut);margin:0}
-.ic{width:48px;height:48px;border-radius:14px;background:var(--gs);display:grid;place-items:center;font-size:24px}
-.step{position:relative;padding-top:64px}.step .n{position:absolute;top:22px;left:26px;width:40px;height:40px;border-radius:50%;background:#0B6B4D;color:#fff;display:grid;place-items:center;font:700 20px 'Bricolage Grotesque',sans-serif}
+.ic{width:52px;height:52px;border-radius:16px;background:var(--gs);display:grid;place-items:center;font-size:26px}
+.step{position:relative;padding-top:70px}.step .n{position:absolute;top:24px;left:28px;width:42px;height:42px;border-radius:50%;background:#0B6B4D;color:#fff;display:grid;place-items:center;font:700 20px 'Bricolage Grotesque',sans-serif}
 .who{display:flex;gap:16px;align-items:flex-start}.who .ic{flex:none}
 .alt{background:var(--card);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+/* Frase grande que se ilumina al leer */
+.statement{padding:120px 0}
+.fill{font:700 clamp(34px,6vw,72px)/1.08 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;margin:0;max-width:18ch;
+  --p:100%;background:linear-gradient(90deg,var(--ink) var(--p),color-mix(in srgb,var(--ink) 22%,transparent) var(--p));-webkit-background-clip:text;background-clip:text;color:transparent}
+.js .fill{--p:0%}
+/* Negocio */
+.bizband{background:linear-gradient(160deg,#12936A,#0B6B4D 75%);color:#fff;position:relative;overflow:hidden}
+.bizband::after{content:"";position:absolute;width:640px;height:640px;border-radius:50%;right:-240px;top:-240px;background:rgba(255,255,255,.07)}
+.bizband .eyebrow{color:var(--mint)}.bizband .sh p{color:#E3F1EA}.bizband h2 em{font-style:normal;color:var(--mint)}
+.bgrid{display:grid;gap:40px;align-items:center;position:relative;z-index:1}
+.bento{display:grid;gap:16px;margin-top:8px}
+.tile{border-radius:28px;padding:30px;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;position:relative;transition:transform .5s var(--ease)}
+.tile:hover{transform:scale(1.015)}
+.tile h3{font-size:clamp(24px,2.6vw,30px);margin:0 0 8px}.tile p{color:var(--mut);margin:0}
+.tile .num{font:700 clamp(40px,5vw,60px)/1 'Bricolage Grotesque',sans-serif;color:var(--g);margin:0 0 12px;font-variant-numeric:tabular-nums}
+.tile.dk{background:linear-gradient(160deg,#12936A,#0B6B4D);color:#fff;border-color:transparent}.tile.dk p{color:#E3F1EA}.tile.dk .num{color:var(--mint)}
+.tile .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.tile .chips span{background:var(--gs);color:var(--g);border-radius:999px;padding:6px 12px;font-weight:700;font-size:14px}
+.tile.dk .chips span{background:rgba(255,255,255,.16);color:#fff}
+.plus{display:inline-block;background:#EAB308;color:#172554;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:800;vertical-align:middle;margin-left:6px}
+.cmp{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--line);border-radius:26px;overflow:hidden;box-shadow:var(--shadow)}
+.cmp th,.cmp td{padding:16px 20px;text-align:left;border-top:1px solid var(--line);font-size:16px}.cmp tr:first-child th{border-top:0}
+.cmp th{font:700 18px 'Bricolage Grotesque',sans-serif}.cmp td.y{color:var(--g);font-weight:800;text-align:center}.cmp td.n{color:var(--mut);text-align:center}
+.cmp th.c{text-align:center}
 .flags{display:flex;flex-wrap:wrap;gap:10px}.flags span{background:var(--gs);color:var(--g);font-weight:700;border-radius:999px;padding:8px 16px}
-.dl{background:linear-gradient(150deg,#12936A,#0B6B4D);color:#fff;border-radius:28px;padding:40px 28px;display:grid;gap:24px;align-items:center}
-.dl h2{font-size:clamp(28px,4vw,40px);margin-bottom:10px}.dl p{color:#E3F1EA;margin:0}
-details{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 22px}
+.dl{background:linear-gradient(150deg,#12936A,#0B6B4D);color:#fff;border-radius:34px;padding:44px 30px;display:grid;gap:24px;align-items:center}
+.dl h2{font-size:clamp(32px,4.6vw,52px);margin-bottom:10px}.dl p{color:#E3F1EA;margin:0}
+details{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px 24px;transition:box-shadow .3s}
+details[open]{box-shadow:var(--shadow)}
 details+details{margin-top:12px}summary{font-weight:700;cursor:pointer;font-size:18px;list-style:none;display:flex;justify-content:space-between;gap:12px}
-summary::after{content:"+";color:var(--g);font-size:24px;line-height:1}details[open] summary::after{content:"–"}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--g);font-size:26px;line-height:1;transition:transform .3s var(--ease)}details[open] summary::after{transform:rotate(45deg)}
 details p{color:var(--mut);margin:12px 0 0}
 .giga{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between}
 .giga .gd{width:52px;height:52px;border-radius:50%;background:#EAB308;color:#172554;font:900 20px system-ui;display:grid;place-items:center;flex:none}
 footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);font-size:15px}
 .fgrid{display:grid;gap:20px}.fgrid a{color:var(--mut);text-decoration:none}.fgrid a:hover{color:var(--g)}
 .fcol{display:flex;flex-direction:column;gap:8px}.fcol b{color:var(--ink)}
-@media(min-width:720px){.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}.dl{grid-template-columns:1.4fr 1fr;padding:48px}.fgrid{grid-template-columns:2fr 1fr 1fr 1fr}}
-@media(min-width:960px){.links{display:flex}.hgrid{grid-template-columns:1.15fr .85fr;align-items:center;padding:80px 0 90px}.grid.c4{grid-template-columns:repeat(4,1fr)}}
-@media(max-width:520px){.navcta .btn.o{display:none}}
+/* Aparecer al bajar */
+.js .rv{opacity:0;transform:translateY(34px);transition:opacity 1s var(--ease),transform 1s var(--ease);transition-delay:var(--d,0s)}
+.js .rv.in{opacity:1;transform:none}
+@media(min-width:720px){.grid.c2,.duo{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}.dl{grid-template-columns:1.4fr 1fr;padding:56px}.fgrid{grid-template-columns:2fr 1fr 1fr 1fr}
+  .bento{grid-template-columns:repeat(6,1fr)}.bento .s2{grid-column:span 2}.bento .s3{grid-column:span 3}.bento .s4{grid-column:span 4}.bento .s6{grid-column:span 6}}
+@media(min-width:960px){.links{display:flex}.grid.c4{grid-template-columns:repeat(4,1fr)}.bgrid{grid-template-columns:1.1fr .9fr}}
+@media(max-width:959px){.navcta .biz{display:none}}
+@media(max-width:520px){.navcta .btn.o{display:none}.cmp th,.cmp td{padding:12px 12px;font-size:15px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.js .rv{opacity:1;transform:none;transition:none}.js .fill{--p:100%}.js .bar i{transform:none}.btn,.card,.pick,.tile{transition:none}.phone{transform:none!important}}
 </style>
 </head>
 <body>
 <header>
   <div class="wrap nav">
-    <a class="brand" href="/" aria-label="Quincena VE, inicio"><img src="/static/icons/icon-192.png" alt="" width="38" height="38">Quincena VE 🇻🇪</a>
+    <a class="brand" href="/" aria-label="Quincena VE, inicio"><img src="/static/icons/icon-192.png" alt="" width="32" height="32">Quincena VE 🇻🇪</a>
     <nav class="links" aria-label="Secciones">
-      <a href="#como-funciona">Cómo funciona</a><a href="#funciones">Funciones</a><a href="#para-quien">Para quién</a><a href="#preguntas">Preguntas</a>
+      <a href="#como-funciona">Cómo funciona</a><a href="#funciones">Funciones</a><a href="#negocio">Negocio</a><a href="#para-quien">Para quién</a><a href="#preguntas">Preguntas</a>
     </nav>
-    <div class="navcta"><a class="btn o biz" href="#negocio">Para tu negocio</a><a class="btn o" href="/app">Entrar</a><a class="btn p" href="/app#registro">Crear cuenta</a></div>
+    <div class="navcta"><a class="btn o biz" href="/app#negocio">Cuenta de negocio</a><a class="btn o" href="/app">Entrar</a><a class="btn p" href="/app#registro">Crear cuenta</a></div>
   </div>
 </header>
 
 <main>
 <section class="hero" aria-labelledby="titulo">
-  <div class="wrap hgrid">
-    <div>
-      <span class="kick">Gratis · Web y Android · Hecho en Venezuela por Gigadevs</span>
-      <h1 id="titulo">Controla tu quincena, <em>en dólares y en bolívares.</em></h1>
-      <p class="lead">Quincena VE es la app de finanzas personales para quien cobra cada 15 días o cada semana. Anota tus gastos, mira cuánto te queda hasta el próximo cobro y deja de adivinar a fin de mes.</p>
-      <div class="ctas"><a class="btn l" href="/app#registro">Crear cuenta gratis</a><a class="btn w" href="/app">Ya tengo cuenta</a></div>
-      <a class="bizlink" href="/app#negocio"><b>¿Tienes un negocio?</b> Crea su cuenta: ventas, fiado y caja en $ y Bs. →</a>
-      <div class="trust"><span>Tasa BCV automática</span><span>Sin publicidad</span><span>Tus datos son solo tuyos</span></div>
-    </div>
-    <div class="phone" role="img" aria-label="Ejemplo de la pantalla de inicio de Quincena VE">
-      <small>Te queda esta quincena</small>
-      <div class="big">$148,20</div>
-      <div class="bar"><i></i></div>
-      <div class="row"><span>Alquiler <span class="tag">Fijo</span></span><b>$120,00</b></div>
-      <div class="row"><span>Mercado</span><b>Bs. 3.400,00</b></div>
-      <div class="row"><span>Carlos te debe <span class="tag">el 15</span></span><b>$25,00</b></div>
-      <div class="note">Montos de ejemplo</div>
+  <div class="wrap hin">
+    <span class="kick rv">Gratis · Web y Android · Hecho en Venezuela por Gigadevs</span>
+    <h1 id="titulo" class="rv" style="--d:.08s">Controla tu quincena, <em>en dólares y en bolívares.</em></h1>
+    <p class="lead rv" style="--d:.16s">Quincena VE es la app para quien cobra cada 15 días o cada semana, y para el negocio que cobra en $ y Bs. Anota, mira cuánto te queda y deja de adivinar a fin de mes.</p>
+    <div class="ctas rv" style="--d:.24s"><a class="btn l" href="/app#registro">Crear cuenta gratis</a><a class="btn w" href="/app#negocio">Crear la cuenta de mi negocio</a></div>
+    <div class="trust rv" style="--d:.32s"><span>Tasa BCV automática</span><span>Sin publicidad</span><span>Tus datos son solo tuyos</span></div>
+    <div class="stage">
+      <div class="phone rv" style="--d:.4s" role="img" aria-label="Ejemplo de la pantalla de inicio de Quincena VE">
+        <small>Te queda esta quincena</small>
+        <div class="big" data-count="148.20">$148,20</div>
+        <div class="bar"><i></i></div>
+        <div class="row"><span>Alquiler <span class="tag">Fijo</span></span><b>$120,00</b></div>
+        <div class="row"><span>Mercado</span><b>Bs. 3.400,00</b></div>
+        <div class="row"><span>Carlos te debe <span class="tag">el 15</span></span><b>$25,00</b></div>
+        <div class="note">Montos de ejemplo</div>
+      </div>
     </div>
   </div>
 </section>
 
+<section class="choose" aria-labelledby="t-elige">
+  <div class="wrap">
+    <div class="sh c rv"><span class="eyebrow">Dos maneras de usarla</span><h2 id="t-elige">Para ti. Para tu negocio. O para los dos.</h2><p>La misma cuenta, cada cosa en su lugar: tu quincena y tu negocio nunca se mezclan.</p></div>
+    <div class="duo">
+      <a class="pick rv" href="/app#registro"><span class="lbl">Para ti</span><h3>Tu quincena, clara</h3><p>Ingresos, gastos, pagos fijos, lo que te deben y tu plan de deudas, en dólares y en moneda local con la tasa del día.</p><span class="more">Crear cuenta personal</span></a>
+      <a class="pick biz rv" style="--d:.1s" href="/app#negocio"><span class="lbl">Para tu negocio</span><h3>Ventas, fiado y caja</h3><p>Cuánto vendiste hoy, quién te debe y cuánto ganaste en el mes, con la tasa que tú elijas: BCV dólar, BCV euro o USDT.</p><span class="more">Crear la cuenta de mi negocio</span></a>
+    </div>
+  </div>
+</section>
+
+<section class="statement" aria-label="En resumen">
+  <div class="wrap"><p class="fill">En dólares. En bolívares. Con la tasa del día, cada gasto y cada venta en su lugar.</p></div>
+</section>
+
 <section id="como-funciona" aria-labelledby="t-como">
   <div class="wrap">
-    <div class="sh"><span class="eyebrow">Cómo funciona</span><h2 id="t-como">Tres pasos y ya sabes cuánto te queda</h2><p>No necesitas saber de finanzas ni llenar hojas de cálculo.</p></div>
+    <div class="sh rv"><span class="eyebrow">Cómo funciona</span><h2 id="t-como">Tres pasos y ya sabes cuánto te queda</h2><p>No necesitas saber de finanzas ni llenar hojas de cálculo.</p></div>
     <div class="grid c3">
-      <div class="card step"><span class="n">1</span><h3>Crea tu cuenta y elige tu país</h3><p>Con tu correo, en un minuto. Quincena VE usa tu moneda local y su tipo de cambio. Luego indicas si cobras por quincena o cada semana.</p></div>
-      <div class="card step"><span class="n">2</span><h3>Anota tus gastos</h3><p>En dólares o en moneda local. En Android, compártelos directo desde el mensaje del banco o del pago móvil: el monto y el comercio ya vienen escritos.</p></div>
-      <div class="card step"><span class="n">3</span><h3>Mira cuánto te queda</h3><p>Quincena VE descuenta lo fijo, te avisa de los pagos que vienen y te muestra lo que realmente te queda hasta el próximo cobro.</p></div>
+      <div class="card step rv"><span class="n">1</span><h3>Crea tu cuenta y elige tu país</h3><p>Con tu correo, en un minuto. Quincena VE usa tu moneda local y su tipo de cambio. Luego indicas si cobras por quincena o cada semana.</p></div>
+      <div class="card step rv" style="--d:.1s"><span class="n">2</span><h3>Anota tus gastos</h3><p>En dólares o en moneda local. En Android, compártelos directo desde el mensaje del banco o del pago móvil: el monto y el comercio ya vienen escritos.</p></div>
+      <div class="card step rv" style="--d:.2s"><span class="n">3</span><h3>Mira cuánto te queda</h3><p>Quincena VE descuenta lo fijo, te avisa de los pagos que vienen y te muestra lo que realmente te queda hasta el próximo cobro.</p></div>
     </div>
   </div>
 </section>
 
 <section id="funciones" class="alt" aria-labelledby="t-func">
   <div class="wrap">
-    <div class="sh"><span class="eyebrow">Funciones</span><h2 id="t-func">Todo tu dinero en un solo lugar</h2><p>Pensada para la realidad de cobrar en una moneda y gastar en otra.</p></div>
+    <div class="sh rv"><span class="eyebrow">Funciones</span><h2 id="t-func">Todo tu dinero en un solo lugar</h2><p>Pensada para la realidad de cobrar en una moneda y gastar en otra.</p></div>
     <div class="grid c2 c4">
-      <div class="card"><div class="ic" aria-hidden="true">💵</div><h3>Dólares y moneda local</h3><p>Cada gasto se guarda con la tasa de su día. En Venezuela, tasa BCV automática y, si quieres, también la USDT.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">⚡</div><h3>Gastos en 2 segundos</h3><p>Comparte el mensaje del banco con Quincena VE o repite tus gastos frecuentes con un toque.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">📅</div><h3>Pagos y compromisos</h3><p>Colegio, alquiler, servicios y todo lo que se repite cada mes, con avisos antes de que venza.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">🤝</div><h3>Me deben</h3><p>Anota quién te debe, cuánto y para cuándo. Quincena VE te recuerda cuándo toca cobrar.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">📉</div><h3>Plan para tus deudas</h3><p>Organiza lo que debes y arma un plan de pagos realista con lo que te queda cada quincena.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">🏦</div><h3>Tus cuentas</h3><p>Efectivo, bancos y billeteras por separado, con transferencias entre ellas.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">🔐</div><h3>Entra con tu huella</h3><p>Acceso con huella o rostro, avisos de seguridad por correo y sesiones que se cierran solas.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">📲</div><h3>Web y Android</h3><p>Usa la misma cuenta en la computadora, en el navegador del teléfono y en la app de Android.</p></div>
+      <div class="card rv"><div class="ic" aria-hidden="true">💵</div><h3>Dólares y moneda local</h3><p>Cada gasto se guarda con la tasa de su día. En Venezuela, tasa BCV automática y, si quieres, también la USDT y el euro.</p></div>
+      <div class="card rv" style="--d:.06s"><div class="ic" aria-hidden="true">⚡</div><h3>Gastos en 2 segundos</h3><p>Comparte el mensaje del banco con Quincena VE o repite tus gastos frecuentes con un toque.</p></div>
+      <div class="card rv" style="--d:.12s"><div class="ic" aria-hidden="true">📅</div><h3>Pagos y compromisos</h3><p>Colegio, alquiler, servicios y todo lo que se repite cada mes, con avisos antes de que venza.</p></div>
+      <div class="card rv" style="--d:.18s"><div class="ic" aria-hidden="true">🤝</div><h3>Me deben</h3><p>Anota quién te debe, cuánto y para cuándo. Quincena VE te recuerda cuándo toca cobrar.</p></div>
+      <div class="card rv"><div class="ic" aria-hidden="true">📉</div><h3>Plan para tus deudas</h3><p>Organiza lo que debes y arma un plan de pagos realista con lo que te queda cada quincena.</p></div>
+      <div class="card rv" style="--d:.06s"><div class="ic" aria-hidden="true">🏦</div><h3>Tus cuentas</h3><p>Efectivo, bancos y billeteras por separado, con transferencias entre ellas.</p></div>
+      <div class="card rv" style="--d:.12s"><div class="ic" aria-hidden="true">🔐</div><h3>Entra con tu huella</h3><p>Acceso con huella o rostro, avisos de seguridad por correo y sesiones que se cierran solas.</p></div>
+      <div class="card rv" style="--d:.18s"><div class="ic" aria-hidden="true">📲</div><h3>Web y Android</h3><p>Usa la misma cuenta en la computadora, en el navegador del teléfono y en la app de Android.</p></div>
     </div>
   </div>
 </section>
 
-<section id="para-quien" aria-labelledby="t-quien">
-  <div class="wrap">
-    <div class="sh"><span class="eyebrow">Para quién es</span><h2 id="t-quien">Hecha para quien vive de quincena en quincena</h2><p>Si alguna vez llegaste al 15 o al 30 sin saber en qué se fue el dinero, Quincena VE es para ti.</p></div>
-    <div class="grid c2">
-      <div class="card who"><div class="ic" aria-hidden="true">👷</div><div><h3>Trabajadores con sueldo quincenal o semanal</h3><p>Reparte tu ingreso entre lo fijo, el ahorro y el día a día, y sabe cuánto puedes gastar hoy.</p></div></div>
-      <div class="card who"><div class="ic" aria-hidden="true">👨‍👩‍👧</div><div><h3>Familias</h3><p>Lleva el control del colegio, el alquiler y el mercado sin que se te pase ningún pago.</p></div></div>
-      <div class="card who"><div class="ic" aria-hidden="true">💻</div><div><h3>Freelancers y emprendedores</h3><p>Cobras en dólares y gastas en bolívares o pesos: Quincena VE hace la conversión por ti con la tasa del día.</p></div></div>
-      <div class="card who"><div class="ic" aria-hidden="true">🙋</div><div><h3>Quien presta y le deben</h3><p>Lleva la cuenta de lo que te deben amigos y familiares sin incomodidades ni olvidos.</p></div></div>
-    </div>
-  </div>
-</section>
-
-<section id="negocio" class="alt" aria-labelledby="t-neg">
-  <div class="wrap hgrid">
+<section id="negocio" class="bizband" aria-labelledby="t-neg">
+  <div class="wrap bgrid">
     <div>
-      <span class="eyebrow" style="color:var(--g);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:1.5px">Nuevo · Para tu negocio</span>
-      <h2 id="t-neg" class="negt">Quincena VE para tu negocio: <em>ventas, fiado y caja en $ y Bs.</em></h2>
-      <p class="lead">Para bodegas, comida, belleza, venta por Instagram y cualquier emprendimiento que cobra por pago móvil, en efectivo o en dólares. Va aparte de tu quincena personal, en la misma cuenta.</p>
-      <ul class="blist">
-        <li><b>Ventas con la tasa del día:</b> anota cada venta en bolívares o dólares y mira cuánto vendiste hoy.</li>
-        <li><b>Fiado:</b> quién te debe, cuánto y desde cuándo, con recordatorio por WhatsApp.</li>
-        <li><b>Caja y ganancia:</b> cierra la caja al final del día y mira tu ganancia del mes en dólares.</li>
-        <li><b>Negocio Plus:</b> productos con inventario, recibos para WhatsApp, Excel para tu contador y vendedores que registran ventas desde su teléfono.</li>
-      </ul>
-      <div class="ctas"><a class="btn l" href="/app#negocio">Crear la cuenta de mi negocio</a><a class="btn w" href="/app">Ya tengo cuenta</a></div>
-      <p class="mut" style="font-size:14px;margin-top:14px">Quincena VE lleva tus cuentas; no emite facturas fiscales. ¿Ya usas la app? Actívalo en Más › Mi negocio.</p>
+      <div class="sh rv" style="margin-bottom:28px"><span class="eyebrow">Nuevo · Quincena VE Negocio</span><h2 id="t-neg">Tu negocio, <em>en $ y en Bs.</em></h2><p>Para bodegas, comida, belleza, venta por Instagram y cualquier emprendimiento que cobra por pago móvil, en efectivo o en divisas. Va aparte de tu quincena, en la misma cuenta.</p></div>
+      <div class="ctas rv" style="--d:.1s"><a class="btn l" href="/app#negocio">Crear la cuenta de mi negocio</a><a class="btn w" href="/app">Ya tengo cuenta</a></div>
+      <p class="rv" style="--d:.15s;font-size:14px;margin-top:16px;color:#E3F1EA">¿Ya usas la app? Actívalo en Más › Mi negocio. Quincena VE lleva tus cuentas; no emite facturas fiscales.</p>
     </div>
-    <div class="phone" role="img" aria-label="Ejemplo de la pantalla Negocio de Quincena VE">
+    <div class="phone rv" style="--d:.2s" role="img" aria-label="Ejemplo de la pantalla Negocio de Quincena VE">
       <small>Vendiste hoy</small>
-      <div class="big">$128,50</div>
+      <div class="big" data-count="128.50">$128,50</div>
       <div class="row"><span>Pago móvil</span><b>$65,00</b></div>
       <div class="row"><span>Efectivo $</span><b>$40,00</b></div>
       <div class="row"><span>Fiado · María <span class="tag">viernes</span></span><b>$12,00</b></div>
@@ -232,38 +271,98 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
   </div>
 </section>
 
-<section aria-labelledby="t-paises">
-  <div class="wrap grid c2" style="align-items:center">
-    <div class="sh" style="margin:0"><span class="eyebrow">Países</span><h2 id="t-paises">Con tu moneda y tu tipo de cambio</h2><p>Al crear tu cuenta eliges tu país y Quincena VE usa su moneda y su tasa oficial, que se actualiza sola.</p></div>
-    <div class="flags"><span>Venezuela · Bs.</span><span>Colombia · COP</span><span>Chile · CLP</span><span>Perú · S/</span><span>México · MXN</span><span>Argentina · ARS</span></div>
+<section aria-labelledby="t-bento">
+  <div class="wrap">
+    <div class="sh c rv"><span class="eyebrow">Modo Negocio</span><h2 id="t-bento">Todo lo que tu negocio cuenta cada día</h2><p>Desde la primera venta de la mañana hasta el cierre de caja.</p></div>
+    <div class="bento">
+      <div class="tile dk s4 rv"><p class="num">Ventas</p><h3>Con la tasa del día, en $ y Bs.</h3><p>Anota cada venta y su medio de pago. En Android, comparte el mensaje del pago móvil recibido y la venta se abre ya escrita.</p><div class="chips"><span>Pago móvil</span><span>Efectivo Bs.</span><span>Efectivo $</span><span>Zelle</span><span>Binance</span><span>Punto de venta</span></div></div>
+      <div class="tile s2 rv" style="--d:.08s"><p class="num">Fiado</p><h3>Quién te debe</h3><p>Abonos, fecha de pago y recordatorio por WhatsApp en un toque.</p></div>
+      <div class="tile s2 rv"><p class="num">Caja</p><h3>Cierre del día</h3><p>Cuánto efectivo en Bs. y en $ debería haber, y si cuadra.</p></div>
+      <div class="tile s2 rv" style="--d:.08s"><p class="num">Ganancia</p><h3>Tu mes en limpio</h3><p>Ventas menos compras y gastos, a la tasa de cada día.</p></div>
+      <div class="tile s2 rv" style="--d:.16s"><p class="num">Tu tasa</p><h3>Tú eliges</h3><p>Trabaja con BCV dólar, BCV euro o USDT. Con el euro, todo se ve en €.</p></div>
+      <div class="tile s3 rv"><p class="num">Me pago</p><h3>Sin mezclar el dinero</h3><p>Pasa dinero del negocio a tu quincena personal: sale del negocio y entra como ingreso tuyo.</p></div>
+      <div class="tile s3 rv" style="--d:.08s"><p class="num">Gastos</p><h3>Del negocio, aparte</h3><p>Mercancía, alquiler, servicios y sueldos, sin tocar tu presupuesto personal.</p></div>
+    </div>
   </div>
 </section>
 
-<section id="seguridad" aria-labelledby="t-seg">
+<section class="alt" aria-labelledby="t-empieza">
   <div class="wrap">
-    <div class="sh"><span class="eyebrow">Privacidad y seguridad</span><h2 id="t-seg">Tus finanzas son solo tuyas</h2><p>Nadie más ve tus datos: ni otros usuarios ni anunciantes.</p></div>
+    <div class="sh rv"><span class="eyebrow">Empieza tu negocio</span><h2 id="t-empieza">En tres pasos estás vendiendo</h2></div>
     <div class="grid c3">
-      <div class="card"><div class="ic" aria-hidden="true">🛡️</div><h3>Datos separados por cuenta</h3><p>Cada persona ve solo su información. La contraseña se guarda cifrada y nunca en texto.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">🚫</div><h3>Sin publicidad ni rastreo</h3><p>Solo usamos las cookies necesarias para mantener tu sesión segura. No vendemos ni mostramos tus datos.</p></div>
-      <div class="card"><div class="ic" aria-hidden="true">📨</div><h3>Avisos de seguridad</h3><p>Te escribimos si alguien cambia tu clave o entra desde un teléfono nuevo, y puedes descargar tus datos cuando quieras.</p></div>
+      <div class="card step rv"><span class="n">1</span><h3>Crea la cuenta del negocio</h3><p>Con el nombre de tu negocio, tu correo y tu país. Gratis. O actívalo desde Más si ya usas la app.</p></div>
+      <div class="card step rv" style="--d:.1s"><span class="n">2</span><h3>Elige tu tasa</h3><p>BCV dólar, BCV euro o USDT: tus precios y totales se convierten con ella.</p></div>
+      <div class="card step rv" style="--d:.2s"><span class="n">3</span><h3>Registra tu primera venta</h3><p>Con el botón +, en segundos. Al final del día, cierra la caja y mira cuánto ganaste.</p></div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="t-plus">
+  <div class="wrap" style="max-width:900px">
+    <div class="sh c rv"><span class="eyebrow">Planes</span><h2 id="t-plus">Gratis para empezar. Plus para crecer.</h2><p>Negocio Plus es un plan de pago que se pide por WhatsApp y se activa en tu cuenta.</p></div>
+    <table class="cmp rv">
+      <tr><th>Función</th><th class="c">Gratis</th><th class="c">Plus <span class="plus">PLUS</span></th></tr>
+      <tr><td>Ventas, fiado y gastos del negocio</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>Cierre de caja y ganancia del mes</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>Tasa BCV dólar, BCV euro o USDT</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>Productos con inventario</td><td class="n">—</td><td class="y">✓</td></tr>
+      <tr><td>Recibos para WhatsApp (no fiscales)</td><td class="n">—</td><td class="y">✓</td></tr>
+      <tr><td>Excel del mes para tu contador</td><td class="n">—</td><td class="y">✓</td></tr>
+      <tr><td>Hasta 5 vendedores con su propio usuario</td><td class="n">—</td><td class="y">✓</td></tr>
+    </table>
+    <p class="rv" style="text-align:center;margin-top:24px"><a class="btn p" href="https://wa.me/584242588321?text=Hola%2C%20quiero%20informaci%C3%B3n%20de%20Negocio%20Plus%20en%20Quincena%20VE" rel="noopener">Pedir Negocio Plus por WhatsApp</a></p>
+  </div>
+</section>
+
+<section id="para-quien" class="alt" aria-labelledby="t-quien">
+  <div class="wrap">
+    <div class="sh rv"><span class="eyebrow">Para quién es</span><h2 id="t-quien">Hecha para quien vive de quincena en quincena</h2><p>Si alguna vez llegaste al 15 o al 30 sin saber en qué se fue el dinero, Quincena VE es para ti.</p></div>
+    <div class="grid c2">
+      <div class="card who rv"><div class="ic" aria-hidden="true">👷</div><div><h3>Trabajadores con sueldo quincenal o semanal</h3><p>Reparte tu ingreso entre lo fijo, el ahorro y el día a día, y sabe cuánto puedes gastar hoy.</p></div></div>
+      <div class="card who rv" style="--d:.08s"><div class="ic" aria-hidden="true">👨‍👩‍👧</div><div><h3>Familias</h3><p>Lleva el control del colegio, el alquiler y el mercado sin que se te pase ningún pago.</p></div></div>
+      <div class="card who rv"><div class="ic" aria-hidden="true">🏪</div><div><h3>Bodegas y emprendimientos</h3><p>Ventas, fiado y caja en $ y Bs., aparte de tu quincena. <a class="more" href="#negocio">Conoce el modo Negocio</a></p></div></div>
+      <div class="card who rv" style="--d:.08s"><div class="ic" aria-hidden="true">💻</div><div><h3>Freelancers</h3><p>Cobras en dólares y gastas en bolívares o pesos: Quincena VE hace la conversión por ti con la tasa del día.</p></div></div>
+      <div class="card who rv"><div class="ic" aria-hidden="true">🙋</div><div><h3>Quien presta y le deben</h3><p>Lleva la cuenta de lo que te deben amigos y familiares sin incomodidades ni olvidos.</p></div></div>
+      <div class="card who rv" style="--d:.08s"><div class="ic" aria-hidden="true">🛍️</div><div><h3>Quien vende por Instagram o WhatsApp</h3><p>Anota cada pedido y cada pago móvil, y recuérdale el pago a quien quedó debiendo.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="t-paises">
+  <div class="wrap grid c2" style="align-items:center">
+    <div class="sh rv" style="margin:0"><span class="eyebrow">Países</span><h2 id="t-paises">Con tu moneda y tu tipo de cambio</h2><p>Al crear tu cuenta eliges tu país y Quincena VE usa su moneda y su tasa oficial, que se actualiza sola.</p></div>
+    <div class="flags rv" style="--d:.1s"><span>Venezuela · Bs.</span><span>Colombia · COP</span><span>Chile · CLP</span><span>Perú · S/</span><span>México · MXN</span><span>Argentina · ARS</span></div>
+  </div>
+</section>
+
+<section id="seguridad" class="alt" aria-labelledby="t-seg">
+  <div class="wrap">
+    <div class="sh rv"><span class="eyebrow">Privacidad y seguridad</span><h2 id="t-seg">Tus finanzas son solo tuyas</h2><p>Nadie más ve tus datos: ni otros usuarios ni anunciantes.</p></div>
+    <div class="grid c3">
+      <div class="card rv"><div class="ic" aria-hidden="true">🛡️</div><h3>Datos separados por cuenta</h3><p>Cada persona ve solo su información. La contraseña se guarda cifrada y nunca en texto.</p></div>
+      <div class="card rv" style="--d:.1s"><div class="ic" aria-hidden="true">🚫</div><h3>Sin publicidad ni rastreo</h3><p>Solo usamos las cookies necesarias para mantener tu sesión segura. No vendemos ni mostramos tus datos.</p></div>
+      <div class="card rv" style="--d:.2s"><div class="ic" aria-hidden="true">📨</div><h3>Avisos de seguridad</h3><p>Te escribimos si alguien cambia tu clave o entra desde un teléfono nuevo, y puedes descargar tus datos cuando quieras.</p></div>
     </div>
   </div>
 </section>
 
 <section id="descargar" aria-labelledby="t-dl">
   <div class="wrap">
-    <div class="dl">
-      <div><h2 id="t-dl">Empieza hoy, gratis</h2><p>Crea tu cuenta en la web o descarga la app para Android. En iPhone, ábrela en Safari y agrégala a tu pantalla de inicio.</p></div>
-      <div class="ctas"><a class="btn l" href="/app#registro">Crear cuenta gratis</a><a class="btn w" href="/descargar/android" rel="nofollow">Descargar para Android</a></div>
+    <div class="dl rv">
+      <div><h2 id="t-dl">Empieza hoy, gratis</h2><p>Para ti o para tu negocio. Crea tu cuenta en la web o descarga la app para Android. En iPhone, ábrela en Safari y agrégala a tu pantalla de inicio.</p></div>
+      <div class="ctas"><a class="btn l" href="/app#registro">Crear cuenta gratis</a><a class="btn w" href="/app#negocio">Cuenta de negocio</a><a class="btn w" href="/descargar/android" rel="nofollow">Descargar para Android</a></div>
     </div>
   </div>
 </section>
 
 <section id="preguntas" aria-labelledby="t-faq">
   <div class="wrap" style="max-width:820px">
-    <div class="sh"><span class="eyebrow">Preguntas frecuentes</span><h2 id="t-faq">Lo que más nos preguntan</h2></div>
+    <div class="sh rv"><span class="eyebrow">Preguntas frecuentes</span><h2 id="t-faq">Lo que más nos preguntan</h2></div>
     <details><summary>¿Quincena VE es gratis?</summary><p>Sí. Crear tu cuenta y usar Quincena VE en la web y en Android es gratis, también el modo Negocio. Negocio Plus (productos con inventario, recibos, Excel para el contador y vendedores) es un plan de pago que se pide por WhatsApp.</p></details>
     <details><summary>¿Sirve para mi negocio?</summary><p>Sí. Con el modo Negocio anotas ventas en bolívares y dólares con la tasa del día, el fiado de tus clientes, los gastos del negocio y el cierre de caja, aparte de tu quincena personal. Quincena VE lleva tus cuentas; no emite facturas fiscales.</p></details>
+    <details><summary>¿Puedo tener mi negocio y mis finanzas personales en la misma cuenta?</summary><p>Sí. El modo Negocio va aparte de tu quincena: sus ventas y gastos no se mezclan con tu presupuesto personal. Cuando te pagas a ti mismo desde el negocio, ese dinero entra como ingreso a tu quincena.</p></details>
+    <details><summary>¿Con qué tasa trabaja mi negocio?</summary><p>Tú eliges: dólar BCV, euro BCV o USDT. Las ventas, los precios y los totales del negocio se convierten con esa tasa; con el euro BCV los montos se muestran en euros.</p></details>
+    <details><summary>¿Mis vendedores ven mis ganancias?</summary><p>No. Con Negocio Plus cada vendedor entra con su propio usuario y solo puede registrar ventas. Tú ves sus ventas con su nombre y puedes quitarle el acceso cuando quieras.</p></details>
     <details><summary>¿Qué tasa de cambio usa?</summary><p>En Venezuela usa la tasa oficial del BCV, que se actualiza sola, y si quieres también la tasa USDT. En Colombia, Chile, Perú, México y Argentina usa el tipo de cambio oficial de cada país. Cada gasto guarda la tasa del día en que lo registraste.</p></details>
     <details><summary>¿Tengo que dar permiso para que lea mis mensajes del banco?</summary><p>No. En Android tú decides qué compartir: mantienes presionado el mensaje del banco o del pago móvil y eliges Compartir › Quincena VE. La app no lee tus mensajes por su cuenta.</p></details>
     <details><summary>¿Funciona en iPhone?</summary><p>Sí, desde el navegador. En Safari puedes agregarla a tu pantalla de inicio para abrirla como una app. La app nativa por ahora es solo para Android.</p></details>
@@ -273,7 +372,7 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
 </section>
 
 <section class="alt" aria-labelledby="t-giga">
-  <div class="wrap giga">
+  <div class="wrap giga rv">
     <div style="display:flex;gap:16px;align-items:center;max-width:640px">
       <div class="gd" aria-hidden="true">GD</div>
       <div><h2 id="t-giga" style="font-size:26px;margin-bottom:6px">Un producto de Gigadevs</h2><p style="margin:0;color:var(--mut)">Quincena VE es desarrollada por Gigadevs, equipo venezolano de software: sistemas administrativos, páginas web y apps móviles a la medida.</p></div>
@@ -307,6 +406,25 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
   }
   // Pista para Android: si el navegador es de Android, destaca la descarga de la app.
   if(/Android/i.test(navigator.userAgent)){var d=document.querySelector('#descargar .btn.w');if(d){d.className='btn l';d.textContent='Descargar la app'}}
+})();
+</script>
+<script>
+// Animaciones al estilo de Apple: aparecer al bajar, frase que se ilumina al leer, teléfono que se inclina y montos que cuentan.
+(function(){
+  var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var els=[].slice.call(document.querySelectorAll('.rv,.bar'));
+  var counts=[].slice.call(document.querySelectorAll('[data-count]'));
+  function money(n){return '$'+n.toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})}
+  function count(el){var to=parseFloat(el.getAttribute('data-count')),t0=null;function f(t){if(!t0)t0=t;var k=Math.min(1,(t-t0)/1400),e=1-Math.pow(1-k,3);el.textContent=money(to*e);if(k<1)requestAnimationFrame(f)}requestAnimationFrame(f)}
+  if(reduce||!('IntersectionObserver' in window)){els.forEach(function(e){e.classList.add('in')});return}
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;e.target.classList.add('in');var c=e.target.querySelector&&e.target.querySelector('[data-count]');if(c)count(c);io.unobserve(e.target)})},{rootMargin:'0px 0px -8% 0px',threshold:.12});
+  els.forEach(function(e){if(e.closest('.hero')&&!e.closest('.stage'))e.classList.add('in');else io.observe(e)});
+  var phone=document.querySelector('.hero .phone'),fills=[].slice.call(document.querySelectorAll('.fill')),ticking=false;
+  function tick(){ticking=false;var h=innerHeight;
+    if(phone&&phone.classList.contains('in')){var p=Math.min(1,Math.max(0,scrollY/(h*.7)));phone.style.transform='rotateX('+((1-p)*14).toFixed(2)+'deg) scale('+(0.94+p*0.08).toFixed(3)+') translateY('+(-p*30).toFixed(1)+'px)'}
+    fills.forEach(function(el){var r=el.getBoundingClientRect(),p=Math.min(1,Math.max(0,(h*.8-r.top)/(r.height+h*.3)));el.style.setProperty('--p',(p*100).toFixed(1)+'%')})}
+  addEventListener('scroll',function(){if(!ticking){ticking=true;requestAnimationFrame(tick)}},{passive:true});
+  addEventListener('resize',tick);setTimeout(tick,60);
 })();
 </script>
 </body>
