@@ -8,6 +8,23 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## [Sin publicar · tasa BCV del sitio oficial, euro y tasa del negocio] — 28 oct 2026
+
+### Corregido
+- **La tasa se quedaba en la del día anterior:** dolarapi tarda en recoger la tasa que el BCV publica en la tarde y
+  la consulta directa a bcv.org.ve fallaba siempre ("unable to get local issuer certificate": el sitio no envía su
+  certificado intermedio). Ahora el servidor baja ese intermedio desde la dirección que trae el propio certificado
+  del BCV y verifica la cadena completa. La web vuelve a pedir la tasa al volver a la pestaña tras 30 minutos.
+
+### Agregado
+- **Botón "Actualizar"** discreto junto a la tasa en Inicio: la vuelve a pedir al momento (`/api/rate?force=1`, como
+  mucho una consulta a las fuentes por minuto). Inicio muestra también el **euro BCV**.
+- **Tasa del negocio:** en Configurar el negocio se elige BCV dólar, BCV euro o USDT. Ventas, precios, totales,
+  fiado, Excel y vendedores usan esa tasa; con el euro los montos del negocio se ven en €, y "Me pago a mí" pasa a
+  tu quincena su equivalente en dólares.
+- **Página de presentación:** botón "Para tu negocio" en el menú y acceso "¿Tienes un negocio? Crea su cuenta" en
+  la portada.
+
 ## [Sin publicar · Quincena VE para tu negocio] — 27 oct 2026
 
 ### Agregado

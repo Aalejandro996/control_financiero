@@ -120,6 +120,7 @@ DEFAULT_SHARED_DATA = {
     "currency": "USD",
     "exchangeRate": 40.0,
     "marketRate": 0.0,  # dólar del mercado (USDT/paralelo) en Bs.; 0 = desconocido
+    "euroRate": 0.0,  # euro oficial del BCV en Bs.; 0 = desconocido
     "bsSavings": 0.0,  # bolívares que la persona dice tener guardados (para el medidor de poder de compra)
     "rateHistory": [],  # [{"d": "AAAA-MM-DD", "b": tasa BCV, "m": tasa USDT}] un registro por día, máx. 120
     "accounts": [],  # cuentas: banco, efectivo, digital (Zelle, Binance…) con saldo inicial
@@ -145,6 +146,16 @@ DEFAULT_SHARED_DATA = {
     "products": [],  # catálogo (Plus): precio en $, existencia contada en stockDate
     "cashClosings": [],  # cierres de caja: lo que se contó al final del día
 }
+
+BIZ_RATE_KINDS = ("bcv_usd", "bcv_eur", "usdt")
+
+
+def business_rate(data: dict) -> float:
+    """Bs. por unidad de la divisa con que trabaja el negocio (dólar BCV, euro BCV o USDT); si falta, el dólar BCV."""
+    kind = (data.get("business") or {}).get("rateKind")
+    chosen = data.get("euroRate") if kind == "bcv_eur" else data.get("marketRate") if kind == "usdt" else None
+    return _rate_or_none(chosen) or data["exchangeRate"]
+
 
 SALE_METHODS = "pago_movil|efectivo_bs|efectivo_usd|zelle|binance|punto|transferencia|otro"
 BIZ_CATEGORIES = "mercancia|alquiler|servicios|sueldos|transporte|impuestos|retiro|otro"
@@ -562,7 +573,9 @@ def _clean_rows(raw, limit: int, spec: dict) -> list:
 def normalize_business(value: dict, result: dict) -> None:
     """Quincena VE Negocio: ventas, fiado, gastos del negocio, productos y cierres de caja."""
     raw = value.get("business") if isinstance(value.get("business"), dict) else {}
-    result["business"] = {"enabled": raw.get("enabled") is True, "name": str(raw.get("name") or "")[:80], "phone": str(raw.get("phone") or "")[:30]}
+    result["business"] = {"enabled": raw.get("enabled") is True, "name": str(raw.get("name") or "")[:80], "phone": str(raw.get("phone") or "")[:30],
+                          # Tasa con la que trabaja el negocio: dólar BCV, euro BCV o USDT (paralelo).
+                          "rateKind": raw.get("rateKind") if raw.get("rateKind") in BIZ_RATE_KINDS else "bcv_usd"}
     sales = _clean_rows(value.get("sales"), 20000, {
         "id": "id", "date": "date", "amount": "pos", "currency": "cur", "method": f"enum:{SALE_METHODS}", "accountId": "ref",
         "client": "str:80", "phone": "str:30", "credit": "bool", "dueDate": "date", "note": "str:200", "rateUsed": "pos", "seller": "str:40"})
@@ -601,6 +614,7 @@ def normalize_shared_data(value) -> dict:
         rate = default_rate
     result["exchangeRate"] = rate if math.isfinite(rate) and 0 < rate < 1_000_000 else default_rate
     result["marketRate"] = _rate_or_none(value.get("marketRate")) or 0.0
+    result["euroRate"] = _rate_or_none(value.get("euroRate")) or 0.0
     try:
         savings = float(value.get("bsSavings") or 0)
     except (TypeError, ValueError, OverflowError):
@@ -1037,7 +1051,7 @@ def three_way_merge(base_data, incoming_data, current_data):
             else:
                 merged[key] = incoming[key]
     # Tasas e historial: gana el último que escribe (no es un conflicto real).
-    for key in ("country", "exchangeRate", "marketRate", "rateHistory", "termsVersion"):
+    for key in ("country", "exchangeRate", "marketRate", "euroRate", "rateHistory", "termsVersion"):
         if incoming[key] != base[key]:
             merged[key] = incoming[key]
     for key in ("expenses", "debts", "incomeSources", "schoolExpenses", "schoolPayments", "plannedDebtPayments", "recurring",
@@ -2077,7 +2091,8 @@ def seller_home():
     data = normalize_shared_data(ensure_user_state(owner.id).data)
     mine = [x for x in data["sales"] if x.get("seller") == g.user.username][:200]
     products = [{"id": p["id"], "name": p["name"], "price": p["price"], "code": p["code"]} for p in data["products"] if not p["archived"]]
-    return jsonify(business=data["business"]["name"] or owner.username, country=data["country"], rate=data["exchangeRate"],
+    return jsonify(business=data["business"]["name"] or owner.username, country=data["country"], rate=business_rate(data),
+                   rateKind=data["business"]["rateKind"],
                    products=products, sales=mine)
 
 
@@ -2099,7 +2114,7 @@ def seller_sale():
         record = db.session.query(SharedState).filter_by(user_id=owner.id).with_for_update().first()
     data = normalize_shared_data(record.data)
     if sale.get("currency") in ("BS", "VES"):
-        sale["rateUsed"] = data["exchangeRate"]
+        sale["rateUsed"] = business_rate(data)
     cleaned = normalize_shared_data({**data, "sales": [sale]})["sales"]
     if not cleaned or cleaned[0]["amount"] <= 0:
         db.session.rollback()
@@ -2296,10 +2311,45 @@ def _http_json(url: str):
         return json.loads(response.read().decode("utf-8"))
 
 
-def _http_text(url: str) -> str:
+def _http_text(url: str, context: ssl.SSLContext | None = None) -> str:
     request_obj = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Quincena VE)"})
-    with urllib.request.urlopen(request_obj, timeout=8) as response:
+    with urllib.request.urlopen(request_obj, timeout=8, context=context) as response:
         return response.read().decode("utf-8", "replace")
+
+
+_BCV_CONTEXT: ssl.SSLContext | None = None
+
+
+def _bcv_context() -> ssl.SSLContext:
+    """El sitio del BCV no envía su certificado intermedio y la verificación falla ("unable to get local issuer").
+    Se descarga el intermedio desde la dirección que trae su propio certificado (AIA) y se suma a los de confianza
+    solo para esta conexión: la cadena se sigue verificando completa hasta una raíz reconocida."""
+    global _BCV_CONTEXT
+    if _BCV_CONTEXT is not None:
+        return _BCV_CONTEXT
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
+    cert = x509.load_pem_x509_certificate(ssl.get_server_certificate(("www.bcv.org.ve", 443), timeout=8).encode())
+    chain = []
+    for _ in range(3):  # sube hasta tres niveles por si hay más de un intermedio
+        try:
+            aia = cert.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
+        except x509.ExtensionNotFound:
+            break
+        urls = [d.access_location.value for d in aia if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS]
+        if not urls or cert.issuer == cert.subject:
+            break
+        with urllib.request.urlopen(urllib.request.Request(urls[0], headers={"User-Agent": "Quincena/1.0"}), timeout=8) as response:
+            raw = response.read()
+        cert = x509.load_der_x509_certificate(raw) if not raw.lstrip().startswith(b"-----") else x509.load_pem_x509_certificate(raw)
+        chain.append(cert.public_bytes(Encoding.PEM).decode())
+    if not chain:
+        raise ValueError("el certificado del BCV no indica de dónde bajar su intermedio")
+    context = ssl.create_default_context()
+    context.load_verify_locations(cadata="".join(chain))
+    _BCV_CONTEXT = context
+    return context
 
 
 def _day_of(value) -> str:
@@ -2308,15 +2358,22 @@ def _day_of(value) -> str:
     return match.group(1) if match else ""
 
 
-def _bcv_official() -> tuple[float, str]:
-    """Tasa oficial publicada en bcv.org.ve: (Bs. por USD, fecha valor ISO)."""
-    page = _http_text("https://www.bcv.org.ve/")
-    found = re.search(r'id="dolar".*?<strong>\s*([\d.,]+)\s*</strong>', page, re.S)
+def _bcv_official() -> tuple[float, float | None, str]:
+    """Tasas oficiales publicadas en bcv.org.ve: (Bs. por USD, Bs. por EUR o None, fecha valor ISO)."""
+    try:
+        page = _http_text("https://www.bcv.org.ve/")
+    except urllib.error.URLError as error:
+        if not isinstance(error.reason, ssl.SSLCertVerificationError):
+            raise
+        page = _http_text("https://www.bcv.org.ve/", context=_bcv_context())
+    number = lambda key: re.search(rf'id="{key}".*?<strong>\s*([\d.,]+)\s*</strong>', page, re.S)
+    found = number("dolar")
     if not found:
         raise ValueError("no encontré la tasa del dólar en la página del BCV")
     value = float(found.group(1).replace(".", "").replace(",", "."))
+    euro = number("euro")
     when = re.search(r'Fecha Valor:.*?content="([^"]+)"', page, re.S)
-    return value, (when.group(1) if when else "")
+    return value, (_rate_or_none(euro.group(1).replace(".", "").replace(",", ".")) if euro else None), (when.group(1) if when else "")
 
 
 def _dolarapi(country: str) -> tuple[list, dict, float]:
@@ -2325,16 +2382,18 @@ def _dolarapi(country: str) -> tuple[list, dict, float]:
     return rows, row, float(row.get("promedio") if row.get("promedio") is not None else row.get("venta"))
 
 
-def fetch_rate(country: str = DEFAULT_COUNTRY) -> dict:
+def fetch_rate(country: str = DEFAULT_COUNTRY, force: bool = False) -> dict:
     """Tasa oficial de la moneda local por 1 USD, con caché de 30 minutos y último valor conocido.
 
     Venezuela: la del BCV (bcv.org.ve) y la de dolarapi, y gana la de fecha más reciente (a igual fecha, el BCV), así
     una fuente caída o atrasada no deja la tasa vieja. Paralelo de Venezuela y oficial de Argentina: dolarapi. Los demás
     países: tipos de cambio diarios de open.er-api.com. Cada consulta queda en el registro de Render."""
     country = clean_country(country)
-    cache = _RATE_CACHE.setdefault(country, {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None, "source": None})
+    cache = _RATE_CACHE.setdefault(country, {"rate": None, "updated": None, "fetched": 0.0, "parallel": None, "parallel_updated": None, "source": None,
+                                             "euro": None, "euro_updated": None})
     now = time.time()
-    if cache["rate"] and now - cache["fetched"] < 1800:
+    # Caché de 30 minutos; "Actualizar" (force) vuelve a consultar, pero no más de una vez por minuto.
+    if cache["rate"] and now - cache["fetched"] < (60 if force else 1800):
         return cache
     cache["fetched"] = now - 1500 if cache["rate"] else 0.0  # ante un fallo, se reintenta en ~5 minutos
     stamp = datetime.now(timezone.utc).isoformat()
@@ -2354,12 +2413,24 @@ def fetch_rate(country: str = DEFAULT_COUNTRY) -> dict:
             notes.append(f"dolarapi falló ({type(error).__name__}: {str(error)[:120]})")
         if country == "VE":
             try:
-                value, when = _bcv_official()
-                notes.append(f"BCV {value} (fecha valor {when or 'sin fecha'})")
+                value, euro, when = _bcv_official()
+                notes.append(f"BCV {value}, euro {euro} (fecha valor {when or 'sin fecha'})")
                 if ok(value):
                     candidates.append((_day_of(when), 1, value, when or stamp, "bcv"))
+                if euro:
+                    cache.update(euro=euro, euro_updated=when or stamp)
             except Exception as error:
                 notes.append(f"BCV falló ({type(error).__name__}: {str(error)[:120]})")
+            if not cache.get("euro") or (cache.get("euro_updated") or "") < stamp[:10]:
+                try:  # euro de respaldo si la página del BCV no respondió
+                    erows = _http_json("https://ve.dolarapi.com/v1/euros")
+                    erow = next((item for item in erows if item.get("fuente") == "oficial"), None) if isinstance(erows, list) else None
+                    evalue = _rate_or_none((erow or {}).get("promedio") if (erow or {}).get("promedio") is not None else (erow or {}).get("venta"))
+                    if evalue and _day_of((erow or {}).get("fechaActualizacion")) >= _day_of(cache.get("euro_updated")):
+                        cache.update(euro=evalue, euro_updated=(erow or {}).get("fechaActualizacion") or stamp)
+                        notes.append(f"euro dolarapi {evalue}")
+                except Exception as error:
+                    notes.append(f"euro dolarapi falló ({type(error).__name__})")
         if candidates:
             day, _, value, updated, source = max(candidates)
             cache.update(rate=value, updated=updated, fetched=now, source=source)
@@ -2390,11 +2461,12 @@ def list_countries():
 @require_auth()
 def get_rate():
     country = clean_country(request.args.get("country"))
-    cached = fetch_rate(country)
+    cached = fetch_rate(country, force=request.args.get("force") == "1")
     if not cached["rate"]:
         return jsonify(error=f"No pudimos obtener el tipo de cambio ({COUNTRIES[country]['official']}) ahora. Inténtalo en unos minutos."), 503
     return jsonify(country=country, rate=cached["rate"], updated_at=cached["updated"], source=cached.get("source"),
-                   parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"))
+                   parallel=cached.get("parallel"), parallel_updated_at=cached.get("parallel_updated"),
+                   euro=cached.get("euro"), euro_updated_at=cached.get("euro_updated"))
 
 
 @app.delete("/api/account")

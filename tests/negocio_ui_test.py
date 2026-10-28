@@ -27,7 +27,7 @@ def check(name, cond, extra=""):
 
 
 def fake_rate(route):
-    route.fulfill(status=200, content_type="application/json", body=json.dumps({"country": "VE", "rate": 100.0, "updated_at": "2026-10-27T12:00:00Z", "parallel": 120.0}))
+    route.fulfill(status=200, content_type="application/json", body=json.dumps({"country": "VE", "rate": 100.0, "updated_at": "2026-10-27T12:00:00Z", "parallel": 120.0, "euro": 110.0}))
 
 
 def text(page):
@@ -203,6 +203,19 @@ try:
         npg.get_by_role("button", name="Crear la cuenta del negocio").click()
         npg.wait_for_selector("nav [data-tab=negocio]", timeout=15000); npg.wait_for_timeout(600)
         check("entra directo a la pestaña Negocio con su nombre", "Panadería Luis" in text(npg) and "Vendiste hoy" in text(npg), text(npg)[:300])
+        npg.click("[data-biz=conf] >> nth=0"); npg.wait_for_timeout(200)
+        check("la configuración ofrece BCV dólar, BCV euro y USDT con su valor", all(x in text(npg) for x in ("BCV euro · Bs. 110,00", "USDT · Bs. 120,00", "BCV dólar · Bs. 100,00")), text(npg)[:600])
+        npg.select_option("#f-sheet [name=rateKind]", "bcv_eur"); sheet_save(npg)
+        npg.click("#app .btn[data-sheet=bizventa]"); npg.fill("#f-sheet [name=amount]", "10"); npg.select_option("#f-sheet [name=currency]", "USD"); sheet_save(npg)
+        t = text(npg)
+        check("con el euro BCV los montos salen en € y en Bs. a 110", "€ 10,00" in t and "Bs. 1.100,00" in t and "a la tasa BCV euro" in t, t[:400])
+        npg.click("[data-biz='sub:gastos']"); npg.click("[data-sheet=bizretiro]"); npg.fill("#f-sheet [name=amount]", "10"); sheet_save(npg)
+        inc = state(npg)["incomes"][0]
+        check("me pago 10 € entra a la quincena como 11 $ (110/100)", inc["amount"] == 11 and inc["currency"] == "USD", inc)
+        npg.click("nav [data-tab=inicio]"); npg.wait_for_timeout(200)
+        check("Inicio muestra el euro BCV y el botón Actualizar", "€ Bs. 110,00" in text(npg) and npg.locator("#rfx").count() == 1)
+        npg.click("#rfx"); npg.wait_for_timeout(500)
+        check("Actualizar pide la tasa de nuevo y lo confirma", "Tasa BCV: Bs. 100,00" in text(npg), text(npg)[-300:])
         nctx.close()
         lctx = b.new_context(base_url=f"http://127.0.0.1:{PORT}"); lp = lctx.new_page(); lp.goto("/app"); lp.wait_for_timeout(800)
         check("la pantalla de entrada ofrece crear la cuenta de un negocio", "¿Tienes un negocio?" in text(lp))

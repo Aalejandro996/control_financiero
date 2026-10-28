@@ -47,7 +47,7 @@ check("una cuenta nueva es plan free y no es vendedora", j["user"]["plan"] == "f
 print("== Datos del negocio ==")
 code, st = ana.req("GET", "/api/state")
 data, rev = st["data"], st["revision"]
-check("el estado trae el negocio apagado por defecto", data["business"] == {"enabled": False, "name": "", "phone": ""} and data["sales"] == [])
+check("el estado trae el negocio apagado por defecto", data["business"] == {"enabled": False, "name": "", "phone": "", "rateKind": "bcv_usd"} and data["sales"] == [])
 new = {**data, "business": {"enabled": True, "name": "Bodega Ana", "phone": "04140000000"},
        "products": [{"id": "p1", "name": "Harina", "price": 1.5, "cost": 1.1, "stock": 20, "track": True}],
        "sales": [{"id": "s1", "date": "2026-10-27T12:00:00Z", "amount": 3, "currency": "USD", "method": "efectivo_usd", "items": [{"productId": "p1", "name": "Harina", "qty": 2, "price": 1.5}]},
@@ -145,12 +145,19 @@ p2 = C()
 code, j = p2.req("POST", "/api/login", {"username": "pedro", "password": "Nueva-Clave-99123x"}, ip="198.51.100.31")
 check("la dueña lo reactiva con contraseña nueva", code == 200, j)
 
+print("== Tasa del negocio ==")
+d0 = A.normalize_shared_data({"exchangeRate": 200, "marketRate": 300, "euroRate": 230, "business": {"enabled": True, "rateKind": "bcv_eur"}})
+check("el negocio guarda la tasa con que trabaja", d0["business"]["rateKind"] == "bcv_eur" and A.business_rate(d0) == 230)
+check("USDT usa la tasa paralela", A.business_rate({**d0, "business": {"rateKind": "usdt"}}) == 300)
+check("una tasa desconocida vuelve a dólar BCV", A.normalize_shared_data({"business": {"rateKind": "oro"}})["business"]["rateKind"] == "bcv_usd")
+check("si falta el euro, usa el dólar BCV", A.business_rate({**d0, "euroRate": 0}) == 200)
+
 print("== Registro de un negocio ==")
 neg = C()
 code, j = neg.req("POST", "/api/register", {"username": "luis", "email": "luis@x.com", "password": "Zorro-Plata-55231x", "accept_terms": True,
                                            "business_name": "  Panadería Luis  "}, ip="198.51.100.50")
 code, st = neg.req("GET", "/api/state")
-check("crear la cuenta del negocio la deja con el modo Negocio activo y su nombre", st["data"]["business"] == {"enabled": True, "name": "Panadería Luis", "phone": ""}, st["data"]["business"])
+check("crear la cuenta del negocio la deja con el modo Negocio activo y su nombre", st["data"]["business"] == {"enabled": True, "name": "Panadería Luis", "phone": "", "rateKind": "bcv_usd"}, st["data"]["business"])
 code, st = otro.req("GET", "/api/state")
 check("una cuenta personal nace sin negocio", st["data"]["business"]["enabled"] is False)
 

@@ -105,6 +105,10 @@ section{padding:72px 0}
 .sh{max-width:700px;margin:0 0 36px}.sh .eyebrow{color:var(--g);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:1.5px}
 .sh h2{font-size:clamp(30px,4.2vw,44px);margin:10px 0 12px}.sh p{color:var(--mut);margin:0;font-size:18px}
 .grid{display:grid;gap:18px}
+.bizlink{display:inline-block;margin:18px 0 4px;padding:12px 18px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.35);color:#fff;text-decoration:none;font-size:16px;line-height:1.4}.bizlink:hover{background:rgba(255,255,255,.22)}
+@media(max-width:959px){.navcta .biz{display:none}}
+.negt{font-size:clamp(30px,4.4vw,48px);margin:12px 0 16px}.negt em{font-style:normal;color:var(--g)}
+.links a,.navcta .btn{white-space:nowrap}
 .blist{padding-left:20px;margin:18px 0 6px;display:grid;gap:8px;line-height:1.5}
 .card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:var(--shadow)}
 .card h3{font-size:22px;margin:14px 0 8px}.card p{color:var(--mut);margin:0}
@@ -134,9 +138,9 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
   <div class="wrap nav">
     <a class="brand" href="/" aria-label="Quincena VE, inicio"><img src="/static/icons/icon-192.png" alt="" width="38" height="38">Quincena VE 🇻🇪</a>
     <nav class="links" aria-label="Secciones">
-      <a href="#como-funciona">Cómo funciona</a><a href="#funciones">Funciones</a><a href="#para-quien">Para quién</a><a href="#negocio">Para tu negocio</a><a href="#preguntas">Preguntas</a>
+      <a href="#como-funciona">Cómo funciona</a><a href="#funciones">Funciones</a><a href="#para-quien">Para quién</a><a href="#preguntas">Preguntas</a>
     </nav>
-    <div class="navcta"><a class="btn o" href="/app">Entrar</a><a class="btn p" href="/app#registro">Crear cuenta</a></div>
+    <div class="navcta"><a class="btn o biz" href="#negocio">Para tu negocio</a><a class="btn o" href="/app">Entrar</a><a class="btn p" href="/app#registro">Crear cuenta</a></div>
   </div>
 </header>
 
@@ -148,6 +152,7 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
       <h1 id="titulo">Controla tu quincena, <em>en dólares y en bolívares.</em></h1>
       <p class="lead">Quincena VE es la app de finanzas personales para quien cobra cada 15 días o cada semana. Anota tus gastos, mira cuánto te queda hasta el próximo cobro y deja de adivinar a fin de mes.</p>
       <div class="ctas"><a class="btn l" href="/app#registro">Crear cuenta gratis</a><a class="btn w" href="/app">Ya tengo cuenta</a></div>
+      <a class="bizlink" href="/app#negocio"><b>¿Tienes un negocio?</b> Crea su cuenta: ventas, fiado y caja en $ y Bs. →</a>
       <div class="trust"><span>Tasa BCV automática</span><span>Sin publicidad</span><span>Tus datos son solo tuyos</span></div>
     </div>
     <div class="phone" role="img" aria-label="Ejemplo de la pantalla de inicio de Quincena VE">
@@ -205,7 +210,7 @@ footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--mut);fon
   <div class="wrap hgrid">
     <div>
       <span class="eyebrow" style="color:var(--g);font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:1.5px">Nuevo · Para tu negocio</span>
-      <h2 id="t-neg">Quincena VE para tu negocio: <em>ventas, fiado y caja en $ y Bs.</em></h2>
+      <h2 id="t-neg" class="negt">Quincena VE para tu negocio: <em>ventas, fiado y caja en $ y Bs.</em></h2>
       <p class="lead">Para bodegas, comida, belleza, venta por Instagram y cualquier emprendimiento que cobra por pago móvil, en efectivo o en dólares. Va aparte de tu quincena personal, en la misma cuenta.</p>
       <ul class="blist">
         <li><b>Ventas con la tasa del día:</b> anota cada venta en bolívares o dólares y mira cuánto vendiste hoy.</li>

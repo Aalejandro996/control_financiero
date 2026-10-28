@@ -20,8 +20,8 @@ def check(name, cond, extra=""):
         fail += 1; print("  FALLA", name, extra)
 
 
-def bcv_page(value, when):
-    return (f'<div id="euro"><strong> 50,00 </strong></div><div id="dolar" class="col-sm-12"><div class="field-content">'
+def bcv_page(value, when, euro="250,75"):
+    return (f'<div id="euro"><strong> {euro} </strong></div><div id="dolar" class="col-sm-12"><div class="field-content">'
             f'<div class="row recuadrotsmc"><div class="col-sm-6 col-xs-6"><span> USD</span></div><div class="col-sm-6 col-xs-6 centrado">'
             f'<strong> {value} </strong></div></div></div></div><div class="pull-right dinpro center">Fecha Valor: '
             f'<span class="date-display-single" property="dc:date" datatype="xsd:dateTime" content="{when}">Martes, 27 Octubre  2026</span></div>')
@@ -31,15 +31,26 @@ SRC = {}
 
 
 def fake_json(url):
+    if url.endswith("/euros"):
+        if isinstance(SRC.get("euros"), (list, Exception)) and not isinstance(SRC["euros"], Exception):
+            return SRC["euros"]
+        raise OSError("sin euros")
     if isinstance(SRC.get("api"), Exception):
         raise SRC["api"]
     return SRC["api"]
 
 
-def fake_text(url):
-    if isinstance(SRC.get("bcv"), Exception):
-        raise SRC["bcv"]
-    return SRC["bcv"]
+CALLS = []
+
+
+def fake_text(url, context=None):
+    CALLS.append(context)
+    bcv = SRC.get("bcv")
+    if isinstance(bcv, Exception) and not (SRC.get("ssl_once") and context is not None):
+        raise bcv
+    if SRC.get("ssl_once") and context is not None:
+        return SRC["ssl_once"]
+    return bcv
 
 
 G = A.fetch_rate.__globals__
@@ -61,11 +72,27 @@ def api(value, when, par=60.0):
 
 print("== Página del BCV ==")
 SRC["bcv"] = bcv_page("215,67890000", "2026-10-28T00:00:00-04:00")
-v, when = A._bcv_official()
+v, eur, when = A._bcv_official()
 check("lee la tasa con coma decimal", abs(v - 215.6789) < 1e-9, v)
+check("lee también el euro BCV", eur == 250.75, eur)
 check("lee la fecha valor", when.startswith("2026-10-28"), when)
 SRC["bcv"] = bcv_page("1.215,50", "2026-10-28T00:00:00-04:00")
 check("entiende el punto de miles", A._bcv_official()[0] == 1215.5)
+
+print("== Certificado incompleto del BCV ==")
+import ssl as _ssl, urllib.error as _ue
+SRC.update(bcv=_ue.URLError(_ssl.SSLCertVerificationError("unable to get local issuer certificate")), ssl_once=bcv_page("230,10", "2026-10-29T00:00:00-04:00"))
+A._BCV_CONTEXT = "contexto-con-intermedio"  # en producción se arma bajando el intermedio (AIA); aquí se simula
+CALLS.clear()
+v, eur, when = A._bcv_official()
+check("si falla el certificado, reintenta con el intermedio y lee la tasa", v == 230.10 and CALLS == [None, "contexto-con-intermedio"], (v, CALLS))
+SRC.pop("ssl_once"); A._BCV_CONTEXT = None
+SRC["bcv"] = _ue.URLError(ConnectionResetError("caída"))
+try:
+    A._bcv_official(); otro = False
+except _ue.URLError:
+    otro = True
+check("otros errores de red no intentan el intermedio", otro)
 
 print("== Gana la fuente más reciente ==")
 c = fresh(api(200.0, "2026-10-20T16:00:00.000Z"), bcv_page("215,50", "2026-10-28T00:00:00-04:00"))
@@ -92,12 +119,28 @@ check("y lo registra como error", any(line.startswith("ERROR Tasa VE sin actuali
 SRC.update(api=api(1e9, "2026-10-30T00:00:00Z"), bcv=bcv_page("0,00", "2026-10-30T00:00:00-04:00")); A._RATE_CACHE["VE"].update(fetched=0)
 check("descarta tasas absurdas", A.fetch_rate("VE")["rate"] == 214.0)
 
+print("== Euro y Actualizar ==")
+c = fresh(api(200.0, "2026-10-20T16:00:00.000Z"), bcv_page("215,50", "2026-10-28T00:00:00-04:00", euro="248,30"))
+check("guarda el euro BCV", c["euro"] == 248.3, c)
+SRC["euros"] = [{"fuente": "oficial", "promedio": 249.9, "fechaActualizacion": "2026-10-28T12:00:00Z"}]
+c = fresh(api(200.0, "2026-10-28T16:00:00.000Z"), OSError("caída"))
+check("sin página del BCV, el euro sale de dolarapi", c["euro"] == 249.9, c)
+SRC.pop("euros")
+c = fresh(api(216.0, "2026-10-28T16:00:00.000Z"), OSError("caída"))
+SRC.update(api=api(217.0, "2026-10-29T16:00:00.000Z"))
+check("sin Actualizar, la caché de 30 minutos se respeta", A.fetch_rate("VE")["rate"] == 216.0)
+check("Actualizar no consulta de nuevo antes de un minuto", A.fetch_rate("VE", force=True)["rate"] == 216.0)
+A._RATE_CACHE["VE"]["fetched"] -= 61
+check("Actualizar pasado un minuto trae la tasa nueva", A.fetch_rate("VE", force=True)["rate"] == 217.0)
+
 print("== /api/rate ==")
 fresh(api(200.0, "2026-10-20T16:00:00.000Z"), bcv_page("215,50", "2026-10-28T00:00:00-04:00"))
 cl = A.app.test_client()
 cl.post("/api/setup", json={"bootstrap_token": "b" * 32, "username": "admin", "password": "Zeta-Roble-9182x"}, headers={"X-Forwarded-For": "198.51.100.7"})
 j = cl.get("/api/rate?country=VE").get_json()
 check("devuelve la tasa, su fecha y la fuente", j["rate"] == 215.5 and j["updated_at"].startswith("2026-10-28") and j["source"] == "bcv", j)
+check("devuelve el euro BCV", j["euro"] == 250.75, j)
+check("acepta force=1", cl.get("/api/rate?country=VE&force=1").status_code == 200)
 check("sin sesión no se puede consultar", A.app.test_client().get("/api/rate?country=VE").status_code == 401)
 
 print(f"\n{ok} pruebas correctas, {fail} con falla")
