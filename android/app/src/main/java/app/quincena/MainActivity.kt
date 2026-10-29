@@ -9,6 +9,7 @@ import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -21,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -197,7 +199,8 @@ fun App(
     }
     QuincenaTheme {
         val p = pal
-        Box(Modifier.fillMaxSize().background(p.bg)) {
+        Box(Modifier.fillMaxSize()) {
+            GlassBackground()
             when {
                 UpdateGate.required || st.update?.required == true -> ForceUpdateScreen(st.update)
                 lock.locked -> LockScreen(unlock)
@@ -274,23 +277,15 @@ fun Main(
     }
     BackHandler(enabled = st.tab != "inicio") { st.go("inicio") }
 
-    Scaffold(
-        containerColor = p.bg,
-        bottomBar = { NavBar(st) },
-        floatingActionButton = {
-            Box(
-                Modifier.size(56.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(p.g).clickable { st.open(if (st.tab == "negocio") "bizventa" else "gasto") },
-                contentAlignment = Alignment.Center,
-            ) { Text("+", color = Color.White, fontSize = 30.sp) }
-        },
-    ) { pad ->
+    // La barra y el botón + flotan sobre el contenido (vidrio): el contenido pasa por debajo y se deja ver.
+    Box(Modifier.fillMaxSize()) {
         key(st.tab) {
             Column(
-                Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()),
+                Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(
-                    Modifier.widthIn(max = 520.dp).fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 96.dp),
+                    Modifier.widthIn(max = 520.dp).fillMaxWidth().navigationBarsPadding().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 170.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     when (st.tab) {
@@ -304,6 +299,17 @@ fun Main(
                 }
             }
         }
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            Box(
+                Modifier.padding(end = 20.dp, bottom = 12.dp).size(60.dp)
+                    .shadow(14.dp, CircleShape, spotColor = p.g, ambientColor = p.g).clip(CircleShape)
+                    .background(Brush.verticalGradient(listOf(Color(0xFF12936A), Color(0xFF0B6B4D))))
+                    .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = .6f), Color.White.copy(alpha = .05f))), CircleShape)
+                    .clickable { st.open(if (st.tab == "negocio") "bizventa" else "gasto") },
+                contentAlignment = Alignment.Center,
+            ) { Text("+", color = Color.White, fontSize = 32.sp) }
+            NavBar(st)
+        }
     }
     SheetHost(st)
     TermsDialog(st)
@@ -315,17 +321,19 @@ fun NavBar(st: AppState) {
     // Con el modo Negocio hay 6 pestañas: Negocio va después de Inicio y las etiquetas se achican para caber.
     val tabs = if (bizOn(st.repo.data)) TABS.take(1) + Triple("negocio", "Negocio", IconNegocio) + TABS.drop(1) else TABS
     val six = tabs.size > 5
-    Column(Modifier.fillMaxWidth().background(p.card)) {
-        HorizontalDivider(color = p.line, thickness = 1.dp)
+    // Barra flotante de vidrio, como en iOS: cápsula translúcida y la pestaña activa resaltada.
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
         Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp),
+            Modifier.fillMaxWidth().glass(RoundedCornerShape(32.dp), 18.dp).padding(horizontal = 6.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
             tabs.forEach { (k, label, icon) ->
                 val on = st.tab == k
                 val c = if (on) p.g else p.mut
                 Column(
-                    (if (six) Modifier.weight(1f) else Modifier.widthIn(min = 64.dp)).heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp)).clickable { st.go(k) },
+                    Modifier.weight(1f).heightIn(min = 54.dp).clip(RoundedCornerShape(26.dp))
+                        .then(if (on) Modifier.background(p.g.copy(alpha = .13f)).border(1.dp, p.g.copy(alpha = .25f), RoundedCornerShape(26.dp)) else Modifier)
+                        .clickable { st.go(k) },
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
                 ) {
                     Icon(icon, null, Modifier.size(24.dp), tint = c)

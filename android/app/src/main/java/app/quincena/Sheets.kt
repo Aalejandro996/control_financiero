@@ -26,7 +26,7 @@ fun SheetHost(st: AppState) {
     val s = st.sheet ?: return
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
-        onDismissRequest = { st.close() }, sheetState = state, containerColor = pal.bg,
+        onDismissRequest = { st.close() }, sheetState = state, containerColor = pal.bg.copy(alpha = .96f),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
     ) {
         key(s) {

@@ -8,6 +8,10 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## Android: diseño Liquid Glass
+- Tarjetas, campos, selectores y botones de vidrio translúcido con reflejo en el borde, sobre un fondo con luces verde y menta (mismos colores de la marca).
+- La barra inferior es una cápsula de vidrio flotante con la pestaña activa resaltada; el botón + flota encima y el contenido pasa por debajo.
+
 ## Panel de administración (solo web)
 - Nueva página /admin, solo para administradores y solo en la web: resumen de cuentas y cobros, base de datos (tablas, filas y tamaño), usuarios (plan, confirmar correo, contraseña, activar o desactivar).
 - Cobros de Negocio Plus: al confirmar un pago se activa o alarga el Plus, se emite la factura con número correlativo de 8 dígitos y se envía en PDF al correo del cliente. Se puede ver, reenviar o anular.
