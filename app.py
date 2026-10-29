@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hmac
 import json
@@ -17,6 +18,7 @@ import ssl
 import time
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from email.message import EmailMessage
 from email.utils import parseaddr
@@ -28,7 +30,7 @@ from pathlib import Path
 from sqlalchemy import inspect as sqlalchemy_inspect
 
 from dotenv import load_dotenv
-from flask import Flask, abort, g, jsonify, request, send_from_directory, session
+from flask import Flask, abort, g, jsonify, request, redirect, send_from_directory, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
@@ -1595,7 +1597,7 @@ def mail_problem() -> str | None:
     return None
 
 
-def brevo_send(api_key: str, to: str, subject: str, body: str, html_body: str | None = None) -> tuple[bool, str]:
+def brevo_send(api_key: str, to: str, subject: str, body: str, html_body: str | None = None, attachments: list | None = None) -> tuple[bool, str]:
     """Correo transaccional por la API HTTPS de Brevo (POST /v3/smtp/email). Devuelve (enviado, detalle)."""
     name, addr = parseaddr(os.getenv("MAIL_FROM", ""))
     if not addr:
@@ -1603,6 +1605,8 @@ def brevo_send(api_key: str, to: str, subject: str, body: str, html_body: str | 
     payload = {"sender": {"name": name or "Quincena VE", "email": addr}, "to": [{"email": to}], "subject": subject, "textContent": body}
     if html_body:
         payload["htmlContent"] = html_body
+    if attachments:  # [(nombre, bytes)], p. ej. la factura en PDF
+        payload["attachment"] = [{"name": name, "content": base64.b64encode(content).decode()} for name, content in attachments]
     req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode("utf-8"), method="POST",
                                  headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"})
     try:
@@ -1624,12 +1628,12 @@ def brevo_send(api_key: str, to: str, subject: str, body: str, html_body: str | 
         return False, f"No se pudo contactar a Brevo ({type(error).__name__})."
 
 
-def send_mail(to: str, subject: str, body: str, html_body: str | None = None) -> bool:
+def send_mail(to: str, subject: str, body: str, html_body: str | None = None, attachments: list | None = None) -> bool:
     """Envía un correo. Prefiere la API HTTPS de Brevo (funciona en el plan gratis de Render, que bloquea SMTP);
     si no hay BREVO_API_KEY, usa SMTP de Gmail con contraseña de aplicación."""
     api_key = os.getenv("BREVO_API_KEY", "").strip()
     if api_key:
-        sent, detail = brevo_send(api_key, to, subject, body, html_body)
+        sent, detail = brevo_send(api_key, to, subject, body, html_body, attachments)
         if not sent:
             app.logger.error("Brevo no envió el correo «%s»: %s", subject, detail)
         return sent
@@ -1642,6 +1646,8 @@ def send_mail(to: str, subject: str, body: str, html_body: str | None = None) ->
     message.set_content(body)
     if html_body:
         message.add_alternative(html_body, subtype="html")
+    for name, content in attachments or []:
+        message.add_attachment(content, maintype="application", subtype="pdf", filename=name)
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10, context=ssl.create_default_context()) as smtp:
             smtp.login(smtp_user, smtp_password)
@@ -2514,6 +2520,557 @@ def delete_account():
     session.clear()
     audit("account_deleted", f"Cuenta eliminada (id {uid})", None)
     return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- Panel de administración (solo web): BD, usuarios,
+# cobros de Negocio Plus, facturas en PDF por correo y búsqueda de pagos en Binance.
+
+VE_TZ = timezone(timedelta(hours=-4))
+BILLING_DEFAULTS = {"issuer_name": "Gigadevs", "issuer_rif": "27344270-3",
+                    "issuer_address": "Av. Víctor Baptista, Urb. José Gregorio Hernández\nLos Teques, Miranda. Zona Postal 1201", "issuer_phone": "", "issuer_email": "",
+                    "doc_title": "Factura", "series": "", "plus_price_usd": 0.0, "plus_days": 30, "iva_pct": 16.0, "igtf_pct": 3.0,
+                    "footer": "", "imprenta": ""}
+FOREIGN_METHODS = {"binance", "zelle", "efectivo_usd"}  # pagos en divisas: llevan IGTF
+PLUS_METHODS = {"binance": "Binance (USDT)", "pago_movil": "Pago móvil", "transferencia": "Transferencia", "zelle": "Zelle",
+                "efectivo_usd": "Efectivo $", "efectivo_bs": "Efectivo Bs.", "otro": "Otro"}
+
+
+class AppSetting(db.Model):
+    key = db.Column(db.String(64), primary_key=True)
+    value = db.Column(db.JSON, nullable=False)
+
+
+class PlusPayment(db.Model):
+    """Un cobro de Negocio Plus y su factura (el número es correlativo y no se reutiliza, aunque se anule)."""
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.Integer, nullable=False, unique=True)
+    series = db.Column(db.String(8), nullable=False, default="")
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
+    amount_usd = db.Column(db.Float, nullable=False)  # precio antes de impuestos
+    iva_pct = db.Column(db.Float, nullable=False, default=0)
+    igtf_pct = db.Column(db.Float, nullable=False, default=0)
+    rate = db.Column(db.Float, nullable=True)  # Bs. por $ (BCV) del día del cobro
+    method = db.Column(db.String(20), nullable=False)
+    reference = db.Column(db.String(120), nullable=True)
+    binance_tx = db.Column(db.String(80), nullable=True, unique=True)  # una transacción de Binance paga un solo cobro
+    days = db.Column(db.Integer, nullable=False)
+    period_from = db.Column(db.DateTime(timezone=True), nullable=False)
+    period_to = db.Column(db.DateTime(timezone=True), nullable=False)
+    client = db.Column(db.JSON, nullable=False)  # {name, doc, address, phone, email}
+    control_number = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_by = db.Column(db.Integer, nullable=True)
+    emailed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    void_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    void_reason = db.Column(db.String(200), nullable=True)
+
+
+def billing_settings() -> dict:
+    row = db.session.get(AppSetting, "billing")
+    return {**BILLING_DEFAULTS, **(row.value if row and isinstance(row.value, dict) else {})}
+
+
+def _aware(when):
+    return when if when is None or when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def ve_money(value: float, decimals: int = 2) -> str:
+    """1234.5 → 1.234,50 (formato de Venezuela)."""
+    return f"{value:,.{decimals}f}".replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def payment_totals(p: "PlusPayment") -> dict:
+    """Igual que la facturación del ERP (Prov. SNAT/2011/00071, LIVA, Ley de IGTF): el precio se pacta en $ y se lleva a Bs.
+    con la tasa BCV del día; el IVA se calcula sobre la base en Bs.; si se paga en divisas, el IGTF va APARTE del total."""
+    from decimal import ROUND_HALF_UP, Decimal
+    q2 = lambda v: Decimal(v).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    rate = Decimal(str(p.rate or 1))
+    base_usd = q2(Decimal(str(p.amount_usd)))
+    base_bs = q2(base_usd * rate)
+    iva_bs = q2(base_bs * Decimal(str(p.iva_pct or 0)) / 100)
+    total_bs = base_bs + iva_bs
+    igtf_bs = q2(total_bs * Decimal(str(p.igtf_pct or 0)) / 100)
+    pay_bs = total_bs + igtf_bs
+    usd = lambda v: float(q2(v / rate))
+    return {"rate": float(rate), "base_usd": float(base_usd), "base_bs": float(base_bs), "iva_bs": float(iva_bs), "total_bs": float(total_bs),
+            "igtf_bs": float(igtf_bs), "pay_bs": float(pay_bs), "iva_usd": usd(iva_bs), "total_usd": usd(total_bs), "igtf_usd": usd(igtf_bs),
+            "pay_usd": usd(pay_bs), "in_currency": p.method in FOREIGN_METHODS}
+
+
+def payment_json(p: "PlusPayment", users: dict | None = None) -> dict:
+    t = payment_totals(p)
+    return {"id": p.id, "number": p.number, "series": p.series, "doc": doc_number(p), "user_id": p.user_id,
+            "username": (users or {}).get(p.user_id), "amount_usd": p.amount_usd, "total": t["pay_usd"], "total_bs": t["pay_bs"], "igtf_bs": t["igtf_bs"],
+            "rate": p.rate, "method": p.method, "method_label": PLUS_METHODS.get(p.method, p.method), "reference": p.reference,
+            "binance_tx": p.binance_tx, "days": p.days, "period_from": _aware(p.period_from).isoformat(), "period_to": _aware(p.period_to).isoformat(),
+            "client": p.client, "control_number": p.control_number, "created_at": _aware(p.created_at).isoformat(),
+            "emailed_at": _aware(p.emailed_at).isoformat() if p.emailed_at else None,
+            "void_at": _aware(p.void_at).isoformat() if p.void_at else None, "void_reason": p.void_reason}
+
+
+def doc_number(p: "PlusPayment") -> str:
+    return f"{p.series}-{p.number:08d}" if p.series else f"{p.number:08d}"
+
+
+def _latin(text) -> str:
+    """Las fuentes básicas del PDF usan Latin-1 (cubre á, ñ, ¿, °): lo demás (emojis, €) se reemplaza."""
+    return str(text or "").replace("€", "EUR").replace("—", "-").replace("–", "-").replace("·", "-").encode("latin-1", "replace").decode("latin-1")
+
+
+def invoice_pdf(p: "PlusPayment", cfg: dict) -> bytes:
+    """Factura en PDF: emisor, número y control, adquirente, condiciones, detalle y totales como en el ERP."""
+    from fpdf import FPDF
+    t = payment_totals(p)
+    green, green2, mint, soft, ink, mut, navy = (11, 107, 77), (18, 147, 106), (191, 240, 216), (243, 248, 245), (18, 33, 27), (70, 86, 78), (23, 37, 84)
+    white = (255, 255, 255)
+    pdf = FPDF(format="Letter", unit="mm")
+    pdf.set_auto_page_break(False)
+    pdf.add_page()
+    L, W = 14, pdf.w - 28
+    icons = Path(app.static_folder) / "icons"
+    logo, giga = icons / "icon-192.png", icons / "gigadevs.png"
+    when = _aware(p.created_at).astimezone(VE_TZ)
+    title = cfg["doc_title"] or "Factura"
+
+    def text(x, y, w, s, size=9, style="", color=ink, align="L", h=4.6):
+        pdf.set_xy(x, y); pdf.set_font("Helvetica", style, size); pdf.set_text_color(*color)
+        pdf.cell(w, h, _latin(s), align=align)
+
+    # Banda superior con las dos marcas y franja tricolor
+    pdf.set_fill_color(*green); pdf.rect(0, 0, pdf.w, 30, "F")
+    pdf.set_fill_color(*green2); pdf.ellipse(pdf.w - 78, -52, 120, 81, "F")
+    pdf.set_fill_color(*white); pdf.rect(L, 7, 16, 16, "F", round_corners=True, corner_radius=4)
+    if logo.exists():
+        pdf.image(str(logo), x=L + 1, y=8, w=14)
+    text(L + 20, 8.5, 80, "Quincena VE", 19, "B", white, h=8)
+    text(L + 20, 17, 80, "Negocio Plus", 9, "B", mint)
+    if giga.exists():
+        pdf.image(str(giga), x=L + W - 18, y=6, w=18)
+    text(L + W - 80, 10, 60, "Una app de", 7.5, "", mint, "R")
+    text(L + W - 80, 14.5, 60, "Gigadevs", 13, "B", white, "R", 6)
+    for i, c in enumerate(((255, 204, 0), (0, 36, 125), (207, 20, 43))):
+        pdf.set_fill_color(*c); pdf.rect(i * pdf.w / 3, 30, pdf.w / 3, 1.6, "F")
+
+    # Emisor (izquierda) y documento (derecha)
+    y = 39
+    text(L, y, 110, cfg["issuer_name"] or "Gigadevs", 13, "B", ink, h=6); y += 6.5
+    if cfg["issuer_rif"]:
+        text(L, y, 110, f"RIF: {cfg['issuer_rif']}", 9, "B", ink); y += 4.8
+    for line in str(cfg["issuer_address"] or "").splitlines():
+        text(L, y, 110, line, 8.5, "", mut); y += 4.2
+    contact = " - ".join(x for x in (cfg["issuer_phone"], cfg["issuer_email"]) if x)
+    if contact:
+        text(L, y, 110, contact, 8.5, "", mut); y += 4.2
+    bx, bw = L + W - 70, 70
+    pdf.set_fill_color(*soft); pdf.set_draw_color(*mint); pdf.rect(bx, 37, bw, 36, "DF", round_corners=True, corner_radius=3)
+    text(bx + 5, 40, bw - 10, title.upper(), 13, "B", green, h=6)
+    rows = [("N°", doc_number(p), "B"), ("N° de Control", p.control_number or "-", "B"), ("Fecha de emisión", when.strftime("%d/%m/%Y"), ""),
+            ("Hora de emisión", when.strftime("%I:%M %p").replace("AM", "a. m.").replace("PM", "p. m."), "")]
+    ry = 47.5
+    for label, value, style in rows:
+        text(bx + 5, ry, 30, label, 8.5, "", mut); text(bx + 35, ry, bw - 40, value, 8.5, style, ink, "R"); ry += 5.6
+
+    # Adquirente y condiciones
+    y = 80
+    c = p.client or {}
+    half = (W - 6) / 2
+    for i, (head, lines) in enumerate((
+            ("Adquirente", [c.get("name"), f"RIF/C.I.: {c.get('doc')}" if c.get("doc") else "", c.get("address"),
+                            " - ".join(x for x in (c.get("phone"), c.get("email")) if x)]),
+            ("Condiciones", ["Pago: Contado", f"Forma de pago: {PLUS_METHODS.get(p.method, p.method)}" + (f" - Ref. {p.reference}" if p.reference else ""),
+                             f"Moneda: USD - Tasa BCV: {ve_money(t['rate'], 4)} Bs/USD", "Página 1 de 1"]))):
+        x = L + i * (half + 6)
+        pdf.set_draw_color(*mint); pdf.rect(x, y, half, 30, "D", round_corners=True, corner_radius=3)
+        text(x + 4, y + 3, half - 8, head.upper(), 7.5, "B", green)
+        ly = y + 8.5
+        for j, line in enumerate(l for l in lines if l):
+            text(x + 4, ly, half - 8, line, 9 if j == 0 and i == 0 else 8.5, "B" if j == 0 and i == 0 else "", ink if j == 0 else mut); ly += 4.6
+
+    # Detalle
+    y = 118
+    cols = [("Código", 22, "L"), ("Descripción", W - 22 - 14 - 30 - 30, "L"), ("Cant.", 14, "R"), ("Precio unit. (USD)", 30, "R"), ("Monto (Bs)", 30, "R")]
+    pdf.set_fill_color(*green); pdf.rect(L, y, W, 8, "F", round_corners=True, corner_radius=2)
+    x = L
+    for name, w, align in cols:
+        text(x + 2, y + 1.8, w - 4, name, 8.5, "B", white, align); x += w
+    y += 11
+    start, end = _aware(p.period_from).astimezone(VE_TZ), _aware(p.period_to).astimezone(VE_TZ)
+    values = ["QVE-PLUS", f"Suscripción Quincena VE Negocio Plus - {p.days} días", "1", ve_money(t["base_usd"]), ve_money(t["base_bs"])]
+    x = L
+    for (name, w, align), value in zip(cols, values):
+        text(x + 2, y, w - 4, value, 9, "B" if name == "Descripción" else "", ink, align); x += w
+    text(L + 24, y + 4.8, 120, f"Período: {start:%d/%m/%Y} al {end:%d/%m/%Y}", 8, "", mut)
+    pdf.set_draw_color(*mint); pdf.line(L, y + 11, L + W, y + 11)
+
+    # Marca de agua
+    if logo.exists():
+        with pdf.local_context(fill_opacity=0.06, stroke_opacity=0.06):
+            pdf.image(str(logo), x=pdf.w / 2 - 28, y=142, w=56)
+
+    # Totales (Bs y su equivalente en USD)
+    ty = 196
+    tx, tw = L + W - 100, 100
+    lines = [(f"Base imponible alícuota general {ve_money(p.iva_pct or 0, 0)}%", t["base_bs"], t["base_usd"]),
+             (f"IVA {ve_money(p.iva_pct or 0, 0)}%", t["iva_bs"], t["iva_usd"])]
+    text(tx + 54, ty, 22, "Bs", 8.5, "B", mut, "R"); text(tx + 76, ty, 22, "USD", 8.5, "B", mut, "R")
+    ly = ty + 5.5
+    for label, bs, usd in lines:
+        text(tx, ly, 54, label, 8.5, "", mut); text(tx + 54, ly, 22, ve_money(bs), 8.5, "", ink, "R"); text(tx + 76, ly, 22, ve_money(usd), 8.5, "", ink, "R"); ly += 5
+    pdf.set_draw_color(*mint); pdf.line(tx, ly + 0.5, tx + tw, ly + 0.5); ly += 1.8
+    text(tx, ly, 54, "TOTAL", 9.5, "B", ink); text(tx + 54, ly, 22, ve_money(t["total_bs"]), 9.5, "B", ink, "R"); text(tx + 76, ly, 22, ve_money(t["total_usd"]), 9.5, "B", ink, "R"); ly += 5.5
+    if t["igtf_bs"]:
+        text(tx, ly, 54, f"IGTF {ve_money(p.igtf_pct, 0)}% (pago en divisas)", 8.5, "", mut)
+        text(tx + 54, ly, 22, ve_money(t["igtf_bs"]), 8.5, "", ink, "R"); text(tx + 76, ly, 22, ve_money(t["igtf_usd"]), 8.5, "", ink, "R"); ly += 5.5
+    pdf.set_fill_color(*green); pdf.rect(tx, ly, tw, 10, "F", round_corners=True, corner_radius=2)
+    text(tx + 4, ly + 2.6, 50, "TOTAL A PAGAR", 10, "B", white)
+    text(tx + 54, ly + 2.6, 22, ve_money(t["pay_bs"]), 10, "B", white, "R"); text(tx + 76, ly + 2.6, 22, ve_money(t["pay_usd"]), 10, "B", white, "R")
+
+    # Notas legales (izquierda de los totales)
+    notes = [f"Operación pactada en USD; el equivalente en bolívares se calcula a la tasa de cambio oficial del BCV del día de emisión (Bs {ve_money(t['rate'], 4)})."]
+    if t["igtf_bs"]:
+        notes.append(f"IGTF {ve_money(p.igtf_pct, 0)}% sobre Bs {ve_money(t['total_bs'])} pagados en divisas, cobrado aparte del total.")
+    if cfg.get("footer"):
+        notes.append(cfg["footer"])
+    pdf.set_xy(L, ty + 4); pdf.set_font("Helvetica", "", 7.3); pdf.set_text_color(*mut)
+    pdf.multi_cell(W - tw - 8, 3.5, _latin("\n".join(notes)))
+
+    if p.void_at:
+        with pdf.local_context(fill_opacity=0.45):
+            text(L, 150, W, "ANULADA", 54, "B", (207, 20, 43), "C", 22)
+
+    # Pie
+    pdf.set_draw_color(*mint); pdf.line(L, 252, L + W, 252)
+    foot = cfg.get("imprenta") or "Documento emitido por Quincena VE."
+    pdf.set_xy(L, 254); pdf.set_font("Helvetica", "", 7); pdf.set_text_color(*mut)
+    pdf.multi_cell(W, 3.4, _latin(f"{foot}\n{cfg['issuer_name'] or 'Gigadevs'}{' - RIF ' + cfg['issuer_rif'] if cfg['issuer_rif'] else ''} - {title} {doc_number(p)} del {when:%d/%m/%Y}."), align="C")
+    return bytes(pdf.output())
+
+
+def send_invoice(p: "PlusPayment") -> bool:
+    cfg = billing_settings()
+    to = (p.client or {}).get("email") or ""
+    if not EMAIL_RE.match(to):
+        return False
+    t = payment_totals(p)
+    doc = doc_number(p)
+    until = _aware(p.period_to).astimezone(VE_TZ).strftime("%d/%m/%Y")
+    title = cfg["doc_title"] or "Factura"
+    subject = f"{title} {doc} – Quincena VE Negocio Plus"
+    name = html_escape((p.client or {}).get("name") or "")
+    body = (f"Estimado/a {(p.client or {}).get('name') or ''}:\n\nGracias por adquirir Quincena VE Negocio Plus. Su plan está activo hasta el {until}.\n\n"
+            f"Adjuntamos su {title.lower()} N° {doc} por Bs. {ve_money(t['pay_bs'])} (USD {ve_money(t['pay_usd'])})" +
+            ".\n\nAtentamente,\nEl equipo de Quincena VE")
+    row = lambda k, v: f'<tr><td style="padding:8px 0;color:#46564E;border-top:1px solid #E3ECE6">{k}</td><td align="right" style="padding:8px 0;font-weight:bold;border-top:1px solid #E3ECE6">{v}</td></tr>'
+    inner = (f'<p style="margin:0 0 16px">Estimado/a <b>{name}</b>:</p>'
+             f'<p style="margin:0 0 16px">Gracias por adquirir <b>Quincena VE Negocio Plus</b>. Su plan está activo hasta el <b>{until}</b>.</p>'
+             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;font-size:15px">'
+             + row(html_escape(title), doc) + row("Plan", f"Negocio Plus · {p.days} días") + row("Forma de pago", html_escape(PLUS_METHODS.get(p.method, p.method)))
+             + row("Total a pagar", f"Bs. {ve_money(t['pay_bs'])} · USD {ve_money(t['pay_usd'])}") +
+             '</table><p style="margin:0 0 16px">Adjuntamos el documento en PDF.</p><p style="margin:0">Atentamente,<br><b>El equipo de Quincena VE</b></p>')
+    sent = send_mail(to, subject, body, email_layout(subject, inner, f"Su plan Negocio Plus está activo hasta el {until}."),
+                     [(f"{title.replace(' ', '_')}_{doc}.pdf", invoice_pdf(p, cfg))])
+    if sent:
+        p.emailed_at = datetime.now(timezone.utc)
+        db.session.commit()
+    return sent
+
+
+def binance_client():
+    key, secret = os.getenv("BINANCE_API_KEY", "").strip(), os.getenv("BINANCE_API_SECRET", "").strip()
+    return (key, secret) if key and secret else None
+
+
+def binance_get(path: str, params: dict):
+    """Consulta firmada (HMAC-SHA256) de solo lectura a la cuenta de Binance, igual que en el ERP."""
+    key, secret = binance_client()
+    params = {**{k: v for k, v in params.items() if v is not None}, "timestamp": int(time.time() * 1000), "recvWindow": 10000}
+    query = urllib.parse.urlencode(params)
+    signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    req = urllib.request.Request(f"https://api.binance.com{path}?{query}&signature={signature}", headers={"X-MBX-APIKEY": key, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return json.loads(response.read(2 * 1024 * 1024) or b"null")
+    except urllib.error.HTTPError as error:
+        try:
+            msg = (json.loads(error.read(64 * 1024) or b"{}") or {}).get("msg", "")
+        except Exception:
+            msg = ""
+        raise ValueError(f"Binance respondió {error.code}: {str(msg)[:120]}")
+
+
+def binance_incoming(days: int = 7) -> list[dict]:
+    """Ingresos en USDT recientes: Binance Pay y depósitos acreditados."""
+    end = int(time.time() * 1000)
+    start = end - days * 86400 * 1000
+    out = []
+    pay = binance_get("/sapi/v1/pay/transactions", {"startTime": start, "endTime": end, "limit": 100})
+    for t in (pay.get("data") if isinstance(pay, dict) else None) or []:
+        try:
+            amount = float(t.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        if amount > 0 and t.get("currency") == "USDT" and t.get("transactionId"):
+            out.append({"id": f"pay:{t['transactionId']}", "ts": int(t.get("transactionTime") or 0), "amount": amount, "origin": "Binance Pay",
+                        "payer": str((t.get("payerInfo") or {}).get("name") or (t.get("payerInfo") or {}).get("binanceId") or "")[:60]})
+    try:
+        deposits = binance_get("/sapi/v1/capital/deposit/hisrec", {"coin": "USDT", "status": 1, "startTime": start, "endTime": end})
+    except ValueError:
+        deposits = []
+    for d in deposits if isinstance(deposits, list) else []:
+        try:
+            amount = float(d.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        if amount > 0 and d.get("txId"):
+            out.append({"id": f"dep:{d['txId']}"[:80], "ts": int(d.get("insertTime") or 0), "amount": amount, "origin": f"Depósito {d.get('network', '')}".strip(), "payer": ""})
+    used = {r[0] for r in db.session.query(PlusPayment.binance_tx).filter(PlusPayment.binance_tx.isnot(None)).all()}
+    for item in out:
+        item["used"] = item["id"] in used
+    return sorted(out, key=lambda i: -i["ts"])
+
+
+@app.get("/admin")
+def admin_page():
+    """Panel de administración: solo en la web y solo para administradores (el resto vuelve a la app)."""
+    user = current_user()
+    if user is None or user.role != "admin":
+        return redirect("/app")
+    response = send_from_directory(app.static_folder, "admin.html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/admin/overview")
+@require_auth(admin=True)
+def admin_overview():
+    now = datetime.now(timezone.utc)
+    users = User.query.all()
+    states = {s.user_id: s for s in SharedState.query.all()}
+    members = [u for u in users if u.role == "member" and not u.owner_id]
+    created = lambda u: _aware(u.created_at) or now
+    month_start = now.astimezone(VE_TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    payments = PlusPayment.query.filter(PlusPayment.void_at.is_(None)).all()
+    month = [p for p in payments if _aware(p.created_at) >= month_start]
+    tables, size = [], None
+    for model in (User, SharedState, AuditEvent, PlusPayment, DeviceToken, PushSubscription, EmailVerification, PasswordReset, UserPasskey, ReminderDelivery, AppSetting):
+        tables.append({"name": model.__tablename__, "rows": db.session.query(model).count()})
+    if db.engine.dialect.name == "postgresql":
+        try:
+            size = db.session.execute(db.text("select pg_database_size(current_database())")).scalar()
+            for t in tables:
+                t["bytes"] = db.session.execute(db.text("select pg_total_relation_size(:t)"), {"t": f'"{t["name"]}"'}).scalar()
+        except Exception:
+            db.session.rollback()
+    return jsonify(
+        users={"total": len(members), "active": sum(u.active for u in members), "verified": sum(bool(u.email_verified_at) for u in members),
+               "plus": sum(is_plus(u) for u in members), "sellers": sum(bool(u.owner_id) for u in users), "admins": sum(u.role == "admin" for u in users),
+               "business": sum(bool(((states.get(u.id).data if states.get(u.id) else {}) or {}).get("business", {}).get("enabled")) for u in members),
+               "new_7": sum(created(u) >= now - timedelta(days=7) for u in members), "new_30": sum(created(u) >= now - timedelta(days=30) for u in members),
+               "active_7": sum(bool(states.get(u.id) and _aware(states[u.id].updated_at) >= now - timedelta(days=7)) for u in members)},
+        income={"month_usd": round(sum(payment_totals(p)["pay_usd"] for p in month), 2), "month_count": len(month),
+                "total_usd": round(sum(payment_totals(p)["pay_usd"] for p in payments), 2), "total_count": len(payments)},
+        database={"engine": db.engine.dialect.name, "bytes": size, "tables": tables},
+        mail={"configured": mail_configured(), "problem": mail_problem()}, binance={"configured": bool(binance_client())})
+
+
+@app.get("/api/admin/users")
+@require_auth(admin=True)
+def admin_users():
+    states = {s.user_id: s for s in SharedState.query.all()}
+    out = []
+    for u in User.query.order_by(User.created_at.desc()).all():
+        st = states.get(u.id)
+        biz = ((st.data if st else {}) or {}).get("business") or {}
+        out.append({"id": u.id, "username": u.username, "email": u.email, "verified": bool(u.email_verified_at), "role": u.role, "active": u.active,
+                    "plan": "plus" if is_plus(u) else "free", "plan_until": _aware(u.plan_until).isoformat() if u.plan_until else None,
+                    "owner_id": u.owner_id, "business": biz.get("name") if biz.get("enabled") else None, "country": ((st.data if st else {}) or {}).get("country"),
+                    "created_at": _aware(u.created_at).isoformat() if u.created_at else None, "source": u.signup_source,
+                    "last_activity": _aware(st.updated_at).isoformat() if st and st.updated_at else None})
+    return jsonify(users=out)
+
+
+@app.post("/api/admin/users/<int:user_id>/resend-verification")
+@require_auth(admin=True)
+@limiter.limit("20 per hour")
+def admin_resend_verification(user_id: int):
+    user = db.session.get(User, user_id)
+    if not user or not user.email:
+        return jsonify(error="Esa cuenta no tiene correo."), 404
+    if user.email_verified_at:
+        return jsonify(error="Ese correo ya está confirmado."), 400
+    sent = send_verification(user)
+    audit("verification_resent_by_admin", f"Correo de confirmación reenviado a {user.username}", g.user.id)
+    return jsonify(ok=True, sent=sent)
+
+
+@app.get("/api/admin/settings")
+@require_auth(admin=True)
+def admin_get_settings():
+    return jsonify(billing=billing_settings(), binance={"configured": bool(binance_client()), "pay_id": os.getenv("BINANCE_PAY_ID", "")})
+
+
+@app.put("/api/admin/settings")
+@require_auth(admin=True)
+def admin_put_settings():
+    body = (request.get_json(silent=True) or {}).get("billing") or {}
+    clean = {}
+    for key, default in BILLING_DEFAULTS.items():
+        value = body.get(key, billing_settings()[key])
+        if isinstance(default, (int, float)) and not isinstance(default, bool):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return jsonify(error=f"«{key}» debe ser un número."), 400
+            if not math.isfinite(value) or value < 0 or value > (3660 if key == "plus_days" else 100 if key.endswith("_pct") else 100000):
+                return jsonify(error=f"«{key}» está fuera de rango."), 400
+            value = int(value) if isinstance(default, int) else value
+        else:
+            value = str(value or "").strip()[:400 if key in ("issuer_address", "footer", "imprenta") else 120]
+        clean[key] = value
+    clean["series"] = re.sub(r"[^A-Za-z0-9]", "", clean["series"])[:8]
+    row = db.session.get(AppSetting, "billing") or AppSetting(key="billing", value={})
+    row.value = clean
+    db.session.add(row)
+    db.session.commit()
+    audit("billing_settings_changed", "Datos de facturación actualizados", g.user.id)
+    return jsonify(ok=True, billing=clean)
+
+
+@app.get("/api/admin/payments")
+@require_auth(admin=True)
+def admin_payments():
+    payments = PlusPayment.query.order_by(PlusPayment.number.desc()).limit(500).all()
+    users = {u.id: u.username for u in User.query.filter(User.id.in_([p.user_id for p in payments if p.user_id])).all()}
+    return jsonify(payments=[payment_json(p, users) for p in payments])
+
+
+@app.post("/api/admin/payments")
+@require_auth(admin=True)
+def admin_create_payment():
+    """Registra un cobro de Negocio Plus: activa (o alarga) el Plus, crea la factura y se la envía por correo al cliente."""
+    body = request.get_json(silent=True) or {}
+    cfg = billing_settings()
+    user = User.query.filter_by(username=str(body.get("username", "")).strip().lower()).first()
+    if not user or user.owner_id:
+        return jsonify(error="No existe una cuenta con ese usuario (las de vendedor no compran Plus)."), 404
+    try:
+        amount = float(body.get("amount_usd", cfg["plus_price_usd"]))
+        days = int(body.get("days") or cfg["plus_days"])
+    except (TypeError, ValueError):
+        return jsonify(error="Revisa el monto y los días."), 400
+    if not math.isfinite(amount) or amount <= 0 or amount > 100000 or days < 1 or days > 3660:
+        return jsonify(error="El monto debe ser mayor que 0 y los días entre 1 y 3660."), 400
+    method = str(body.get("method", ""))
+    if method not in PLUS_METHODS:
+        return jsonify(error="Elige la forma de pago."), 400
+    tx = str(body.get("binance_tx") or "").strip()[:80] or None
+    if tx and PlusPayment.query.filter_by(binance_tx=tx).first():
+        return jsonify(error="Ese pago de Binance ya se usó en otra factura."), 409
+    c = body.get("client") if isinstance(body.get("client"), dict) else {}
+    client = {"name": str(c.get("name") or user.username).strip()[:120], "doc": str(c.get("doc") or "").strip()[:30],
+              "address": str(c.get("address") or "").strip()[:200], "phone": str(c.get("phone") or "").strip()[:30],
+              "email": str(c.get("email") or user.email or "").strip().lower()[:254]}
+    if client["email"] and not EMAIL_RE.match(client["email"]):
+        return jsonify(error="El correo del cliente no es válido."), 400
+    now = datetime.now(timezone.utc)
+    current_end = _aware(user.plan_until)
+    start = current_end if user.plan == "plus" and current_end and current_end > now else now
+    rate = _rate_or_none(body.get("rate")) or _rate_or_none(fetch_rate("VE").get("rate"))
+    number = (db.session.query(db.func.max(PlusPayment.number)).scalar() or 0) + 1
+    p = PlusPayment(number=number, series=cfg["series"], user_id=user.id, amount_usd=round(amount, 2), iva_pct=cfg["iva_pct"], igtf_pct=cfg["igtf_pct"] if method in FOREIGN_METHODS else 0,
+                    rate=rate, method=method, reference=str(body.get("reference") or "").strip()[:120] or None, binance_tx=tx, days=days,
+                    period_from=start, period_to=start + timedelta(days=days), client=client,
+                    control_number=str(body.get("control_number") or "").strip()[:40] or None, created_by=g.user.id)
+    user.plan, user.plan_until = "plus", p.period_to
+    db.session.add(p)
+    db.session.commit()
+    audit("plus_payment", f"Cobro {doc_number(p)}: {user.username}, $ {amount:.2f}, {days} días", g.user.id)
+    sent = send_invoice(p) if body.get("send_email", True) else False
+    return jsonify(ok=True, payment=payment_json(p, {user.id: user.username}), emailed=sent), 201
+
+
+def _payment_or_404(payment_id: int):
+    p = db.session.get(PlusPayment, payment_id)
+    if not p:
+        abort(404)
+    return p
+
+
+@app.get("/api/admin/payments/<int:payment_id>/pdf")
+@require_auth(admin=True)
+def admin_payment_pdf(payment_id: int):
+    p = _payment_or_404(payment_id)
+    response = app.response_class(invoice_pdf(p, billing_settings()), mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'inline; filename="Factura_{doc_number(p)}.pdf"'
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/admin/sample-invoice")
+@require_auth(admin=True)
+def admin_sample_invoice():
+    """Factura de muestra con los datos de facturación guardados (no se guarda ni usa número)."""
+    cfg, now = billing_settings(), datetime.now(timezone.utc)
+    p = PlusPayment(number=0, series=cfg["series"], amount_usd=cfg["plus_price_usd"] or 1, iva_pct=cfg["iva_pct"], igtf_pct=cfg["igtf_pct"],
+                    rate=_rate_or_none(fetch_rate("VE").get("rate")), method="binance", reference="MUESTRA", days=cfg["plus_days"],
+                    period_from=now, period_to=now + timedelta(days=cfg["plus_days"]), created_at=now,
+                    client={"name": "Cliente de muestra", "doc": "V-00000000", "address": "Dirección del cliente", "phone": "", "email": ""})
+    response = app.response_class(invoice_pdf(p, cfg), mimetype="application/pdf")
+    response.headers["Content-Disposition"] = 'inline; filename="Factura_muestra.pdf"'
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/api/admin/payments/<int:payment_id>/email")
+@require_auth(admin=True)
+@limiter.limit("30 per hour")
+def admin_payment_email(payment_id: int):
+    p = _payment_or_404(payment_id)
+    email = str((request.get_json(silent=True) or {}).get("email") or "").strip().lower()
+    if email:
+        if not EMAIL_RE.match(email):
+            return jsonify(error="Correo no válido."), 400
+        p.client = {**(p.client or {}), "email": email}
+        db.session.commit()
+    if not (p.client or {}).get("email"):
+        return jsonify(error="El cobro no tiene correo del cliente."), 400
+    sent = send_invoice(p)
+    return (jsonify(ok=True), 200) if sent else (jsonify(error="No se pudo enviar el correo. Revisa la configuración de Brevo."), 502)
+
+
+@app.post("/api/admin/payments/<int:payment_id>/void")
+@require_auth(admin=True)
+def admin_payment_void(payment_id: int):
+    p = _payment_or_404(payment_id)
+    if p.void_at:
+        return jsonify(error="Ya está anulada."), 400
+    p.void_at = datetime.now(timezone.utc)
+    p.void_reason = str((request.get_json(silent=True) or {}).get("reason") or "").strip()[:200] or None
+    user = db.session.get(User, p.user_id) if p.user_id else None
+    # Si era el último cobro de la cuenta, el Plus vuelve a terminar donde terminaba antes de este cobro.
+    if user and user.plan_until and _aware(user.plan_until) == _aware(p.period_to):
+        user.plan_until = _aware(p.period_from)
+        if user.plan_until <= datetime.now(timezone.utc):
+            user.plan, user.plan_until = "free", None
+    db.session.commit()
+    audit("plus_payment_void", f"Cobro {doc_number(p)} anulado", g.user.id)
+    return jsonify(ok=True, payment=payment_json(p))
+
+
+@app.get("/api/admin/binance")
+@require_auth(admin=True)
+@limiter.limit("30 per hour")
+def admin_binance():
+    if not binance_client():
+        return jsonify(error="Binance no está configurado: faltan BINANCE_API_KEY y BINANCE_API_SECRET en Render."), 400
+    try:
+        days = min(max(int(request.args.get("days", 7)), 1), 30)
+        return jsonify(items=binance_incoming(days))
+    except ValueError as error:
+        return jsonify(error=str(error)), 502
+    except Exception as error:
+        app.logger.warning("Binance no respondió: %s", type(error).__name__)
+        return jsonify(error="No se pudo consultar Binance. Inténtalo en unos minutos."), 502
 
 
 @app.errorhandler(413)

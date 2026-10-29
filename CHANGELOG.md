@@ -8,6 +8,12 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## Panel de administración (solo web)
+- Nueva página /admin, solo para administradores y solo en la web: resumen de cuentas y cobros, base de datos (tablas, filas y tamaño), usuarios (plan, confirmar correo, contraseña, activar o desactivar).
+- Cobros de Negocio Plus: al confirmar un pago se activa o alarga el Plus, se emite la factura con número correlativo de 8 dígitos y se envía en PDF al correo del cliente. Se puede ver, reenviar o anular.
+- Factura según la Prov. SNAT/2011/00071, con el mismo cálculo del ERP: precio en USD llevado a Bs. con la tasa BCV, IVA 16% sobre la base en Bs. e IGTF 3% aparte cuando el pago es en divisas. Logos de Quincena VE y Gigadevs; emisor Gigadevs, RIF 27344270-3.
+- Búsqueda de pagos recibidos en Binance (USDT, solo lectura, igual que en el ERP); cada pago se usa en una sola factura.
+
 ## Correos: enlace que siempre abre
 - Brevo cambia el botón de los correos por un enlace suyo de rastreo que algunos teléfonos o redes bloquean. Ahora el correo muestra también la dirección directa, grande y tocable, con la indicación de usarla si el botón da error.
 

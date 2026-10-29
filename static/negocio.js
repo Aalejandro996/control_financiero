@@ -58,7 +58,7 @@ const gigadevsCard=()=>`<div class="card"><b>¿Tu negocio creció?</b><span clas
 
 // ---- Tarjeta en Más ----
 function bizMasCard(){if(S.user?.seller)return '';const b=S.data.business||{};
-  const admin=S.user?.role==='admin'?`<div class="card"><b>Administrar Negocio Plus</b><span class="mut">Activa o quita el Plus de una cuenta cuando recibas el pago.</span><button class="btn o" data-sheet="bizadmin">Activar o quitar Plus</button></div>`:'';
+  const admin=S.user?.role==='admin'?`<div class="card"><b>Administrar Negocio Plus</b><span class="mut">Activa o quita el Plus de una cuenta cuando recibas el pago.</span><button class="btn o" data-sheet="bizadmin">Activar o quitar Plus</button><a class="btn" href="/admin">Panel de administración</a></div>`:'';
   return admin+(bizOn()?`<div class="card"><div class="row sp"><b>Mi negocio</b>${isPlus()?'<span class="pill" style="background:var(--gs);color:var(--g)">Plus</span>':''}</div><span class="mut">${esc(b.name||'Sin nombre')} · las ventas y gastos del negocio van aparte de tu quincena.</span><button class="btn o" data-biz="conf">Configurar el negocio</button></div>`
   :`<div class="card"><b>¿Tienes un negocio?</b><span class="mut">Activa el modo Negocio: ventas en $ y Bs. con la tasa del día, fiado, gastos del negocio, cierre de caja y ganancia del mes. Aparte de tu quincena.</span><button class="btn" data-biz="conf">Activar mi negocio</button></div>`)}
 

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0B6B4D">
+<title>Administrar Quincena VE</title>
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#F3F6F2;--ink:#12211B;--mut:#46564E;--g:#0B6B4D;--g2:#12936A;--mint:#BFF0D8;--gs:#E3F1EA;--line:#D5DDD7;--bad:#B3261E;--warn:#B25E00;--card:#fff;--navy:#172554;--gold:#EAB308}
+@media(prefers-color-scheme:dark){:root{--bg:#0E1512;--ink:#EAF1EC;--mut:#A9B8AF;--g:#4FC79C;--gs:#173226;--line:#2A3A32;--bad:#FF8A80;--warn:#F0A84A;--card:#16211C}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 Figtree,system-ui,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3{font-family:'Bricolage Grotesque',sans-serif;margin:0;letter-spacing:-.01em}
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 75%,transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-bottom:1px solid var(--line)}
+.top{max-width:1200px;margin:0 auto;padding:10px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font:700 19px 'Bricolage Grotesque',sans-serif;text-decoration:none;color:var(--ink)}
+.brand img{width:30px;height:30px;border-radius:8px}.brand .gd{background:var(--navy);border-radius:8px;padding:2px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+.tabs button{border:0;background:none;padding:8px 14px;border-radius:999px;font-weight:600;color:var(--mut);cursor:pointer}
+.tabs button.on{background:var(--g);color:#fff}
+main{max-width:1200px;margin:0 auto;padding:22px 18px 60px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.kpi small{color:var(--mut);font-weight:600}.kpi b{display:block;font:700 30px 'Bricolage Grotesque',sans-serif;margin-top:4px}
+.kpi span{color:var(--mut);font-size:13px}
+.sec{margin:26px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sec h2{font-size:22px}.sec .sp{flex:1}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut)}td.r,th.r{text-align:right}
+.tw{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:18px}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;background:var(--gs);color:var(--g)}
+.pill.plus{background:var(--gold);color:var(--navy)}.pill.bad{background:#FDE8E7;color:var(--bad)}.pill.mut{background:var(--line);color:var(--mut)}
+.btn{border:0;border-radius:999px;text-decoration:none;display:inline-block;background:var(--g);color:#fff;font-weight:700;padding:9px 16px;cursor:pointer}
+.btn.o{background:none;border:1.5px solid var(--g);color:var(--g)}.btn.s{padding:5px 11px;font-size:13px}.btn.bad{background:none;border:1.5px solid var(--bad);color:var(--bad)}
+.btn:disabled{opacity:.5;cursor:default}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:9px 11px;background:var(--card)}
+label{display:block;font-weight:600;font-size:13px;color:var(--mut)}label>input,label>select,label>textarea{margin-top:4px;font-weight:400;color:var(--ink)}
+.form{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}.form .full{grid-column:1/-1}
+.mut{color:var(--mut)}.small{font-size:13px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.total{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}.total.big{font:700 20px 'Bricolage Grotesque',sans-serif;border:0}
+.note{background:var(--gs);border-radius:12px;padding:12px 14px;color:var(--ink);font-size:14px}
+.note.warn{background:#FFF4E0;color:#6B3A00}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:999px;font-weight:600;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
+#toast.on{opacity:1}
+dialog{border:0;border-radius:20px;padding:0;max-width:720px;width:calc(100% - 24px);background:var(--card);color:var(--ink)}
+dialog::backdrop{background:rgba(0,0,0,.35)}dialog .in{padding:20px}
+.bar{height:8px;border-radius:4px;background:var(--gs);overflow:hidden}.bar i{display:block;height:100%;background:var(--g)}
+</style>
+</head>
+<body>
+<header><div class="top">
+  <a class="brand" href="/app"><img src="/static/icons/icon-192.png" alt="">Quincena VE <img class="gd" src="/static/icons/gigadevs.png" alt="Gigadevs"></a>
+  <span class="pill">Administración</span>
+  <nav class="tabs" id="tabs"></nav>
+</div></header>
+<main id="main"><p class="mut">Cargando…</p></main>
+<div id="toast"></div>
+<dialog id="dlg"><div class="in" id="dlgin"></div></dialog>
+<script>
+const S={tab:'resumen',csrf:null,me:null,users:null,payments:null,settings:null,binance:null};
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=(n,d=2)=>Number(n||0).toLocaleString('es-VE',{minimumFractionDigits:d,maximumFractionDigits:d});
+const day=s=>s?new Date(s).toLocaleDateString('es-VE',{day:'2-digit',month:'2-digit',year:'numeric'}):'—';
+const bytes=b=>b==null?'—':b>1e9?money(b/1e9,1)+' GB':b>1e6?money(b/1e6,1)+' MB':money(b/1e3,0)+' KB';
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3200)}
+async function api(url,o={}){const h={'Content-Type':'application/json'};if(S.csrf&&o.method&&o.method!=='GET')h['X-CSRF-Token']=S.csrf;
+  const r=await fetch(url,{credentials:'same-origin',...o,headers:h});const p=await r.json().catch(()=>({}));if(!r.ok)throw new Error(p.error||'Error ('+r.status+')');return p}
+const TABS=[['resumen','Resumen'],['usuarios','Usuarios'],['cobros','Cobros Plus'],['nueva','Nueva factura'],['ajustes','Facturación']];
+function tabs(){$('#tabs').innerHTML=TABS.map(([k,l])=>`<button class="${S.tab===k?'on':''}" data-tab="${k}">${l}</button>`).join('')}
+const METHODS={binance:'Binance (USDT)',pago_movil:'Pago móvil',transferencia:'Transferencia',zelle:'Zelle',efectivo_usd:'Efectivo $',efectivo_bs:'Efectivo Bs.',otro:'Otro'};
+
+async function render(){tabs();const m=$('#main');try{m.innerHTML=await VIEWS[S.tab]()}catch(e){m.innerHTML=`<div class="note warn">${esc(e.message)}</div>`}after()}
+function after(){if(S.tab==='nueva')calc()}
+
+const VIEWS={
+async resumen(){const o=await api('/api/admin/overview');const u=o.users,i=o.income,d=o.database;
+  const k=(t,v,s='')=>`<div class="card kpi"><small>${t}</small><b>${v}</b><span>${s}</span></div>`;
+  const max=Math.max(1,...d.tables.map(t=>t.rows));
+  return `<div class="sec"><h2>Resumen</h2></div><div class="grid">
+   ${k('Cuentas',u.total,`${u.new_7} nuevas en 7 días · ${u.new_30} en 30`)}${k('Activas esta semana',u.active_7,'usaron la app en 7 días')}
+   ${k('Correo confirmado',u.verified,`de ${u.total}`)}${k('Con negocio',u.business,`${u.plus} con Plus · ${u.sellers} vendedores`)}
+   ${k('Cobrado este mes','$ '+money(i.month_usd),`${i.month_count} factura(s)`)}${k('Cobrado en total','$ '+money(i.total_usd),`${i.total_count} factura(s)`)}</div>
+  <div class="sec"><h2>Base de datos</h2><span class="pill mut">${esc(d.engine)}</span><span class="mut small">Tamaño: ${bytes(d.bytes)}</span></div>
+  <div class="tw"><table><tr><th>Tabla</th><th class="r">Filas</th><th class="r">Tamaño</th><th style="width:30%"></th></tr>
+   ${d.tables.map(t=>`<tr><td>${esc(t.name)}</td><td class="r">${t.rows}</td><td class="r">${bytes(t.bytes)}</td><td><div class="bar"><i style="width:${Math.max(2,t.rows/max*100)}%"></i></div></td></tr>`).join('')}</table></div>
+  <div class="sec"><h2>Servicios</h2></div><div class="grid">
+   <div class="card"><b>Correos (Brevo)</b><p class="small ${o.mail.configured?'':'mut'}">${o.mail.configured?'Configurado':'Sin configurar'}${o.mail.problem?' · '+esc(o.mail.problem):''}</p></div>
+   <div class="card"><b>Binance</b><p class="small">${o.binance.configured?'Conectado (solo lectura)':'Sin conectar: agrega BINANCE_API_KEY y BINANCE_API_SECRET en Render.'}</p></div></div>`},
+
+async usuarios(){S.users=(await api('/api/admin/users')).users;const q=(S.q||'').toLowerCase();
+  const list=S.users.filter(u=>!q||[u.username,u.email,u.business].some(x=>String(x||'').toLowerCase().includes(q)));
+  return `<div class="sec"><h2>Usuarios</h2><span class="mut small">${list.length} de ${S.users.length}</span><span class="sp"></span><input id="q" placeholder="Buscar usuario, correo o negocio" value="${esc(S.q||'')}" style="max-width:320px"></div>
+  <div class="tw"><table><tr><th>Usuario</th><th>Correo</th><th>Plan</th><th>Negocio</th><th>Creada</th><th>Última actividad</th><th></th></tr>
+  ${list.map(u=>`<tr><td><b>${esc(u.username)}</b><br><span class="small mut">${u.role==='admin'?'Admin':u.owner_id?'Vendedor':'Cuenta'} · ${esc(u.country||'')}${u.source?' · '+esc(u.source):''}</span>${u.active?'':' <span class="pill bad">Inactiva</span>'}</td>
+   <td>${esc(u.email||'—')}<br>${u.email?(u.verified?'<span class="pill">Confirmado</span>':'<span class="pill mut">Sin confirmar</span>'):''}</td>
+   <td>${u.plan==='plus'?`<span class="pill plus">PLUS</span><br><span class="small mut">${u.plan_until?'hasta '+day(u.plan_until):'sin vencimiento'}</span>`:'<span class="pill mut">Gratis</span>'}</td>
+   <td>${esc(u.business||'—')}</td><td>${day(u.created_at)}</td><td>${day(u.last_activity)}</td>
+   <td><div class="row">${u.owner_id||u.role==='admin'?'':`<button class="btn s" data-act="factura" data-u="${esc(u.username)}">Cobrar Plus</button>`}
+    <button class="btn o s" data-act="plan" data-id="${u.id}" data-u="${esc(u.username)}">Plan</button>
+    ${u.email&&!u.verified?`<button class="btn o s" data-act="verif" data-id="${u.id}">Reenviar confirmación</button>`:''}
+    <button class="btn o s" data-act="clave" data-id="${u.id}" data-u="${esc(u.username)}">Clave</button>
+    ${u.role==='admin'?'':`<button class="btn ${u.active?'bad':'o'} s" data-act="activo" data-id="${u.id}" data-on="${u.active?0:1}">${u.active?'Desactivar':'Activar'}</button>`}</div></td></tr>`).join('')}</table></div>`},
+
+async cobros(){S.payments=(await api('/api/admin/payments')).payments;
+  return `<div class="sec"><h2>Cobros de Negocio Plus</h2><span class="sp"></span><button class="btn" data-tab="nueva">Nueva factura</button></div>
+  ${S.payments.length?`<div class="tw"><table><tr><th>Documento</th><th>Cliente</th><th>Plan</th><th>Pago</th><th class="r">Total</th><th>Correo</th><th></th></tr>
+  ${S.payments.map(p=>`<tr><td><b>${esc(p.doc)}</b><br><span class="small mut">${day(p.created_at)}</span>${p.void_at?' <span class="pill bad">Anulada</span>':''}</td>
+   <td>${esc(p.client.name)}<br><span class="small mut">${esc(p.client.doc||'')} · ${esc(p.username||'')}</span></td>
+   <td>${p.days} días<br><span class="small mut">${day(p.period_from)} al ${day(p.period_to)}</span></td>
+   <td>${esc(p.method_label)}<br><span class="small mut">${esc(p.reference||'')}</span></td>
+   <td class="r"><b>$ ${money(p.total)}</b><br><span class="small mut">${p.rate?'Bs. '+money(p.total_bs):''}</span></td>
+   <td>${p.emailed_at?'<span class="pill">Enviada '+day(p.emailed_at)+'</span>':'<span class="pill mut">No enviada</span>'}</td>
+   <td><div class="row"><a class="btn o s" href="/api/admin/payments/${p.id}/pdf" target="_blank" rel="noopener">PDF</a>
+    <button class="btn o s" data-act="reenviar" data-id="${p.id}" data-mail="${esc(p.client.email||'')}">Enviar</button>
+    ${p.void_at?'':`<button class="btn bad s" data-act="anular" data-id="${p.id}" data-doc="${esc(p.doc)}">Anular</button>`}</div></td></tr>`).join('')}</table></div>`
+  :'<div class="card mut">Aún no hay cobros. Cuando confirmes un pago, crea la factura en «Nueva factura».</div>'}`},
+
+async nueva(){if(!S.rate)S.rate=(await api('/api/rate?country=VE').catch(()=>({}))).rate||0;if(!S.users)S.users=(await api('/api/admin/users')).users;if(!S.settings)S.settings=await api('/api/admin/settings');const b=S.settings.billing,f=S.form||{};
+  const opts=S.users.filter(u=>!u.owner_id&&u.role!=='admin').map(u=>`<option value="${esc(u.username)}">${esc(u.email||'')}${u.business?' · '+esc(u.business):''}</option>`).join('');
+  return `<div class="sec"><h2>Nueva factura de Negocio Plus</h2></div>
+  <p class="note">Úsala cuando ya confirmaste el pago. Al guardar: se activa (o se alarga) el Plus de la cuenta, se crea la factura con número correlativo y se le envía en PDF al correo del cliente.</p>
+  <form id="fnueva" class="card" style="margin-top:14px"><div class="form">
+   <label class="full">Cuenta del cliente (usuario)<input name="username" list="ulist" required autocomplete="off" value="${esc(f.username||'')}"><datalist id="ulist">${opts}</datalist></label>
+   <h3 class="full" style="margin-top:6px">Datos del cliente</h3>
+   <label>Razón social o nombre<input name="name" required maxlength="120" value="${esc(f.name||'')}"></label>
+   <label>RIF o C.I.<input name="doc" maxlength="30" placeholder="V-12345678" value="${esc(f.doc||'')}"></label>
+   <label class="full">Domicilio fiscal<input name="address" maxlength="200" value="${esc(f.address||'')}"></label>
+   <label>Teléfono<input name="phone" maxlength="30" value="${esc(f.phone||'')}"></label>
+   <label>Correo (aquí llega la factura)<input name="email" type="email" maxlength="254" value="${esc(f.email||'')}"></label>
+   <h3 class="full" style="margin-top:6px">Pago</h3>
+   <label>Precio del plan en $ (sin impuestos)<input name="amount_usd" inputmode="decimal" required value="${esc(f.amount_usd??(b.plus_price_usd||''))}"></label>
+   <label>Días de Plus<input name="days" inputmode="numeric" required value="${esc(f.days??b.plus_days)}"></label>
+   <label>Forma de pago<select name="method">${Object.entries(METHODS).map(([k,l])=>`<option value="${k}" ${f.method===k?'selected':''}>${l}</option>`).join('')}</select></label>
+   <label>Referencia del pago<input name="reference" maxlength="120" value="${esc(f.reference||'')}"></label>
+   <label>Pago de Binance<div class="row" style="margin-top:4px"><input name="binance_tx" readonly placeholder="Opcional" value="${esc(f.binance_tx||'')}" style="flex:1"><button type="button" class="btn o s" data-act="binance">Buscar en Binance</button></div></label>
+   <label>Tasa BCV (Bs. por $)<input name="rate" inputmode="decimal" placeholder="La del día, automática" value="${esc(f.rate||'')}"></label>
+   <label>N° de control (si usas imprenta digital)<input name="control_number" maxlength="40" value="${esc(f.control_number||'')}"></label>
+   <label class="full row" style="font-weight:600;color:var(--ink)"><input type="checkbox" name="send_email" checked style="width:auto"> Enviar la factura por correo al cliente</label>
+  </div>
+  <div class="card" style="margin-top:14px;background:var(--gs);border:0" id="calc"></div>
+  <div class="row" style="margin-top:14px"><button class="btn">Confirmar pago y emitir factura</button></div></form>`},
+
+async ajustes(){S.settings=await api('/api/admin/settings');const b=S.settings.billing,bn=S.settings.binance;const v=k=>esc(b[k]??'');
+  return `<div class="sec"><h2>Datos de facturación</h2></div>
+  <form id="fajustes" class="card"><div class="form">
+   <h3 class="full">Emisor (nosotros)</h3>
+   <label>Razón social<input name="issuer_name" value="${v('issuer_name')}"></label><label>RIF<input name="issuer_rif" value="${v('issuer_rif')}"></label>
+   <label class="full">Dirección fiscal<textarea name="issuer_address" rows="2">${v('issuer_address')}</textarea></label>
+   <label>Teléfono<input name="issuer_phone" value="${v('issuer_phone')}"></label><label>Correo<input name="issuer_email" value="${v('issuer_email')}"></label>
+   <h3 class="full">Documento y Negocio Plus</h3>
+   <label>Título del documento<input name="doc_title" value="${v('doc_title')}"></label><label>Serie (vacía = sin serie)<input name="series" value="${v('series')}"></label>
+   <label>Precio de Plus en $ (sin impuestos)<input name="plus_price_usd" inputmode="decimal" value="${v('plus_price_usd')}"></label><label>Días por pago<input name="plus_days" inputmode="numeric" value="${v('plus_days')}"></label>
+   <label>IVA % (sobre la base en Bs.)<input name="iva_pct" inputmode="decimal" value="${v('iva_pct')}"></label><label>IGTF % (solo pagos en divisas: Binance, Zelle, efectivo $)<input name="igtf_pct" inputmode="decimal" value="${v('igtf_pct')}"></label>
+   <label class="full">Nota adicional (aparece junto a los totales)<textarea name="footer" rows="2" placeholder="Opcional">${v('footer')}</textarea></label>
+   <label class="full">Imprenta digital autorizada (pie de la factura)<textarea name="imprenta" rows="2" placeholder="Razón social y RIF de la imprenta, N° y fecha de la providencia, rango de números de control asignado">${v('imprenta')}</textarea></label>
+  </div><div class="row" style="margin-top:14px"><button class="btn">Guardar</button><a class="btn o" href="#" data-act="muestra">Ver factura de muestra</a></div></form>
+  <div class="note ${bn.configured?'':'warn'}" style="margin-top:14px">${bn.configured?'Binance conectado (solo lectura).':'Binance sin conectar. En Render, copia BINANCE_API_KEY y BINANCE_API_SECRET del servicio <b>erp-licencias</b> al servicio <b>control-financiero</b> (Environment).'}${bn.pay_id?' Pay ID: '+esc(bn.pay_id):''}</div>`}
+};
+
+const FOREIGN=['binance','zelle','efectivo_usd'];
+function calc(){const fm=$('#fnueva'),c=$('#calc');if(!fm||!c)return;const b=S.settings.billing,base=parseFloat(String(fm.amount_usd.value).replace(',','.'))||0;
+  const rate=parseFloat(String(fm.rate.value).replace(',','.'))||S.rate||0,r2=x=>Math.round(x*100)/100;
+  if(!rate){c.innerHTML='<span class="mut">Escribe la tasa BCV o espera a que cargue.</span>';return}
+  const bBs=r2(base*rate),iva=r2(bBs*b.iva_pct/100),tot=bBs+iva,igtf=FOREIGN.includes(fm.method.value)?r2(tot*b.igtf_pct/100):0,pay=tot+igtf;
+  const l=(k,v,cls='total')=>`<div class="${cls}"><span>${k}</span><b>Bs ${money(v)} · $ ${money(v/rate)}</b></div>`;
+  c.innerHTML=l(`Base imponible (tasa ${money(rate,4)})`,bBs)+l(`IVA ${money(b.iva_pct,0)}%`,iva)+l('Total',tot)+(igtf?l(`IGTF ${money(b.igtf_pct,0)}% (pago en divisas)`,igtf):'<div class="total mut small"><span>Sin IGTF: pago en bolívares</span></div>')+l('Total a pagar',pay,'total big')}
+
+function fillFromUser(name){const u=(S.users||[]).find(x=>x.username===name.trim().toLowerCase());const fm=$('#fnueva');if(!u||!fm)return;
+  if(!fm.email.value)fm.email.value=u.email||'';if(!fm.name.value)fm.name.value=u.business||u.username}
+
+document.addEventListener('input',e=>{if(e.target.id==='q'){S.q=e.target.value;clearTimeout(S._q);S._q=setTimeout(async()=>{const p=e.target.selectionStart;await render();const q=$('#q');q.focus();q.setSelectionRange(p,p)},250)}
+  if(e.target.form?.id==='fnueva'){if(e.target.name==='username')fillFromUser(e.target.value);calc()}});
+
+document.addEventListener('click',async e=>{const t=e.target.closest('[data-tab],[data-act]');if(!t)return;
+  if(t.dataset.tab){if($('#dlg').open)$('#dlg').close();S.tab=t.dataset.tab;if(S.tab!=='nueva')S.form=null;render();return}
+  const a=t.dataset.act,id=t.dataset.id;e.preventDefault();
+  try{
+  if(a==='factura'){S.form={username:t.dataset.u};S.tab='nueva';await render();fillFromUser(t.dataset.u);return}
+  if(a==='plan'){const d=prompt(`Plus para ${t.dataset.u}: ¿cuántos días? (0 = quitar el Plus)`,'30');if(d===null)return;const n=parseInt(d,10)||0;
+    await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify(n>0?{plan:'plus',days:n}:{plan:'free'})});toast(n>0?'Plus activado.':'Volvió al plan gratis.');render();return}
+  if(a==='verif'){const r=await api(`/api/admin/users/${id}/resend-verification`,{method:'POST'});toast(r.sent?'Correo de confirmación enviado.':'No se pudo enviar el correo.');return}
+  if(a==='clave'){if(!confirm(`¿Restablecer la contraseña de ${t.dataset.u}? Se cerrarán sus sesiones.`))return;const r=await api(`/api/users/${id}/reset-password`,{method:'POST'});
+    dialog(`<h2>Contraseña temporal</h2><p>Dásela a <b>${esc(t.dataset.u)}</b> por un medio seguro. Deberá cambiarla al entrar.</p><p class="card" style="font:600 18px monospace;word-break:break-all">${esc(r.temporary_password)}</p><button class="btn" data-act="cerrar">Listo</button>`);return}
+  if(a==='activo'){const on=t.dataset.on==='1';if(!on&&!confirm('¿Desactivar esta cuenta? No podrá entrar.'))return;await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({active:on})});toast(on?'Cuenta activada.':'Cuenta desactivada.');render();return}
+  if(a==='reenviar'){const m=prompt('¿A qué correo envío la factura?',t.dataset.mail||'');if(!m)return;await api(`/api/admin/payments/${id}/email`,{method:'POST',body:JSON.stringify({email:m})});toast('Factura enviada.');render();return}
+  if(a==='anular'){const r=prompt(`¿Anular ${t.dataset.doc}? El número no se reutiliza y el Plus se recorta. Motivo:`);if(r===null)return;await api(`/api/admin/payments/${id}/void`,{method:'POST',body:JSON.stringify({reason:r})});toast('Factura anulada.');render();return}
+  if(a==='muestra'){window.open('/api/admin/sample-invoice','_blank','noopener');return}
+  if(a==='cerrar'){$('#dlg').close();return}
+  if(a==='binance'){dialog('<h2>Pagos recibidos en Binance</h2><p class="mut">Buscando los últimos 7 días…</p>');const r=await api('/api/admin/binance?days=7');
+    dialog(`<h2>Pagos recibidos en Binance</h2><p class="mut small">Últimos 7 días, en USDT. Elige el que corresponde a este cliente.</p>
+    ${r.items.length?`<div class="tw"><table><tr><th>Fecha</th><th>Origen</th><th>Pagador</th><th class="r">USDT</th><th></th></tr>${r.items.map(i=>`<tr><td>${new Date(i.ts).toLocaleString('es-VE')}</td><td>${esc(i.origin)}</td><td>${esc(i.payer||'—')}</td><td class="r"><b>${money(i.amount,2)}</b></td>
+     <td>${i.used?'<span class="pill mut">Ya usado</span>':`<button class="btn s" data-act="usar" data-tx="${esc(i.id)}" data-amt="${i.amount}">Usar</button>`}</td></tr>`).join('')}</table></div>`:'<p>No hay ingresos en USDT en esos días.</p>'}
+    <div class="row" style="margin-top:12px"><button class="btn o" data-act="cerrar">Cerrar</button></div>`);return}
+  if(a==='usar'){const fm=$('#fnueva');fm.binance_tx.value=t.dataset.tx;fm.method.value='binance';if(!fm.reference.value)fm.reference.value=t.dataset.tx.replace(/^(pay|dep):/,'');$('#dlg').close();toast('Pago de Binance seleccionado.');return}
+  }catch(err){toast(err.message)}});
+
+function dialog(h){$('#dlgin').innerHTML=h;const d=$('#dlg');if(!d.open)d.showModal()}
+
+document.addEventListener('submit',async e=>{e.preventDefault();const fm=e.target,d=Object.fromEntries(new FormData(fm));const btn=fm.querySelector('button:not([type=button])');btn.disabled=true;
+  try{
+  if(fm.id==='fnueva'){S.form=d;const num=v=>parseFloat(String(v||'').replace(',','.'));
+    if(!confirm(`¿Confirmas el pago de ${d.username} y emites la factura?`)){btn.disabled=false;return}
+    const r=await api('/api/admin/payments',{method:'POST',body:JSON.stringify({username:d.username,amount_usd:num(d.amount_usd),days:parseInt(d.days,10),method:d.method,reference:d.reference,
+      binance_tx:d.binance_tx,rate:num(d.rate)||null,control_number:d.control_number,send_email:!!d.send_email,client:{name:d.name,doc:d.doc,address:d.address,phone:d.phone,email:d.email}})});
+    S.form=null;S.users=null;
+    dialog(`<h2>Factura ${esc(r.payment.doc)} emitida</h2><p>Plus activo para <b>${esc(r.payment.username)}</b> hasta el <b>${day(r.payment.period_to)}</b>.</p>
+     <p>${r.emailed?'La factura se envió a <b>'+esc(r.payment.client.email)+'</b>.':'<span style="color:var(--warn)">No se envió por correo</span> (sin correo o Brevo no respondió). Puedes enviarla desde «Cobros Plus».'}</p>
+     <div class="row"><a class="btn" href="/api/admin/payments/${r.payment.id}/pdf" target="_blank" rel="noopener">Ver PDF</a><button class="btn o" data-act="cerrar" data-tab="cobros">Ir a cobros</button></div>`);return}
+  if(fm.id==='fajustes'){const r=await api('/api/admin/settings',{method:'PUT',body:JSON.stringify({billing:d})});S.settings=null;toast('Datos guardados.');render();return}
+  }catch(err){toast(err.message)}finally{btn.disabled=false}});
+
+(async()=>{const s=await api('/api/status').catch(()=>({}));if(!s.authenticated||s.user?.role!=='admin'){location.href='/app';return}S.csrf=s.csrf_token;S.me=s.user;render()})();
+</script>
+</body>
+</html>
