@@ -1,1 +1,1 @@
-Nuevo diseño Liquid Glass: tarjetas y barra de vidrio translúcido, botones con brillo y fondo con luz, con los mismos colores.
+Diseño Liquid Glass también en los recuadros de resumen de Inicio.

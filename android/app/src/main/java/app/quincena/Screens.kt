@@ -221,7 +221,7 @@ fun Tile(t: TileData, modifier: Modifier = Modifier) {
     val p = pal
     val shape = RoundedCornerShape(18.dp)
     Column(
-        modifier.heightIn(min = 82.dp).clip(shape).background(p.card).border(1.dp, p.line, shape).clickable(onClick = t.onClick)
+        modifier.heightIn(min = 82.dp).glass(shape, 6.dp).clickable(onClick = t.onClick)
             .padding(horizontal = 13.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
