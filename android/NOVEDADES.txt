@@ -1,1 +1,1 @@
-Diseño Liquid Glass también en los recuadros de resumen de Inicio.
+Arreglo: al abrir el enlace de confirmación del correo, la app ya no muestra un error y confirma el correo. Etiquetas de la barra inferior completas.

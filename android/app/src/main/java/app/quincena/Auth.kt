@@ -39,6 +39,7 @@ fun LegalText() {
 }
 
 fun friendly(e: Exception): String = when (e) {
+    is kotlinx.coroutines.CancellationException -> "Se interrumpió. Inténtalo de nuevo."
     is Offline -> "Sin conexión. Revisa tu internet e inténtalo de nuevo."
     is ApiError -> e.message ?: "El servidor respondió con error ${e.status}."
     else -> "Error en la app: ${e.javaClass.simpleName}${e.message?.let { " – $it" } ?: ""}"

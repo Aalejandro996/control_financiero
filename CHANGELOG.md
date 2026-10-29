@@ -8,6 +8,10 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## Android 1.23: confirmar el correo desde el enlace
+- Al abrir el enlace de confirmación, la app cancelaba la consulta antes de enviarla y mostraba «The coroutine scope left the composition»; el correo no quedaba confirmado. Ahora la confirmación corre aparte y termina.
+- Las etiquetas de la barra inferior (p. ej. «Movimientos») ya no se cortan.
+
 ## Android: diseño Liquid Glass
 - Tarjetas, campos, selectores y botones de vidrio translúcido con reflejo en el borde, sobre un fondo con luces verde y menta (mismos colores de la marca).
 - La barra inferior es una cápsula de vidrio flotante con la pestaña activa resaltada; el botón + flota encima y el contenido pasa por debajo.

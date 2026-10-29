@@ -190,12 +190,17 @@ fun App(
     LaunchedEffect(resumes) { st.update = repo.checkUpdate(); if (repo.loggedIn) repo.refreshAccount() }
     LaunchedEffect(link) {
         if (link == null || link.first != "verify") return@LaunchedEffect
+        val token = link.second
+        // onLink() borra el enlace y eso cancela este efecto: la confirmación corre aparte para no cortarse a mitad.
+        scope.launch {
+            try {
+                repo.verifyEmail(token)
+                st.toast("¡Listo! Tu correo quedó confirmado.")
+                if (repo.loggedIn) st.mail = repo.emailStatus()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { st.toast(friendly(e)) }
+        }
         onLink()
-        try {
-            repo.verifyEmail(link.second)
-            st.toast("¡Listo! Tu correo quedó confirmado.")
-            if (repo.loggedIn) st.mail = repo.emailStatus()
-        } catch (e: Exception) { st.toast(friendly(e)) }
     }
     QuincenaTheme {
         val p = pal
@@ -324,7 +329,7 @@ fun NavBar(st: AppState) {
     // Barra flotante de vidrio, como en iOS: cápsula translúcida y la pestaña activa resaltada.
     Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
         Row(
-            Modifier.fillMaxWidth().glass(RoundedCornerShape(32.dp), 18.dp).padding(horizontal = 6.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().glass(RoundedCornerShape(32.dp), 18.dp).padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
             tabs.forEach { (k, label, icon) ->
@@ -337,7 +342,7 @@ fun NavBar(st: AppState) {
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
                 ) {
                     Icon(icon, null, Modifier.size(24.dp), tint = c)
-                    Text(label, fontSize = if (six) 10.sp else 12.sp, color = c, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, softWrap = false)
+                    Text(label, fontSize = if (six) 9.5.sp else 11.sp, letterSpacing = (-0.2).sp, color = c, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, softWrap = false)
                 }
             }
         }
