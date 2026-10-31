@@ -1093,6 +1093,8 @@ def index():
     response = send_from_directory(app.static_folder, page)
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Vary"] = "Cookie"
+    if page == "landing.html":  # sin esto la cabecera general «noindex» le pedía a Google NO indexar la portada
+        response.headers["X-Robots-Tag"] = "index, follow, max-image-preview:large"
     return response
 
 
@@ -1104,12 +1106,63 @@ def web_app():
     return response
 
 
+MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "0") == "1"   # 1 = toda la web responde 503 «en mantenimiento»
+
+# Rutas que solo pide un escáner de vulnerabilidades (Quincena no usa PHP, WordPress ni archivos ocultos): se cortan con un
+# 404 inmediato en la capa WSGI, sin abrir sesión ni base de datos.
+SCANNER_PATHS = re.compile(
+    r"(^|/)\.(env|git|svn|hg|aws|ssh|htaccess|htpasswd|ds_store|idea|vscode|docker)"
+    r"|wp-(admin|login|content|includes|json|config)|xmlrpc|phpmyadmin|pma/|myadmin|adminer|cgi-bin|/vendor/|/actuator"
+    r"|server-status|/telescope|/solr|/boaform|/hnap1|/owa/|/autodiscover|\.(php\d?|asp|aspx|jsp|cgi|pl|sql|bak|old|swp|tar|gz|zip|7z|rar|ini|yml|yaml|log)$",
+    re.IGNORECASE)
+
+
+class ScannerFilter:
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "") or ""
+        if (SCANNER_PATHS.search(path) and not path.startswith("/.well-known/")) or "\x00" in path or len(path) > 2048:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store"),
+                                             ("X-Content-Type-Options", "nosniff"), ("X-Robots-Tag", "noindex, nofollow")])
+            return [b"No encontrado"]
+        return self.wsgi_app(environ, start_response)
+
+
+app.wsgi_app = ScannerFilter(app.wsgi_app)
+
+
+@app.before_request
+def maintenance_gate():
+    if MAINTENANCE_MODE and request.path not in ("/healthz", "/robots.txt", "/favicon.ico") and not request.path.startswith("/static/"):
+        return error_response(503)
+    return None
+
+
+@limiter.exempt
+@app.get("/.well-known/security.txt")
+def security_txt():
+    """RFC 9116: a dónde se reporta una vulnerabilidad."""
+    origin = public_origin() or request.url_root.rstrip("/")
+    contact = os.getenv("SECURITY_CONTACT") or ("mailto:" + os.getenv("CONTACT_EMAIL", "aalejandro996@icloud.com"))
+    expires = (date.today() + timedelta(days=180)).isoformat() + "T00:00:00.000Z"
+    body = (f"Contact: {contact}\nExpires: {expires}\nPreferred-Languages: es, en\n"
+            f"Canonical: {origin}/.well-known/security.txt\nPolicy: {origin}/terminos\n")
+    return app.response_class(body, mimetype="text/plain")
+
+
 @limiter.exempt
 @app.get("/robots.txt")
 def robots():
     origin = public_origin() or request.url_root.rstrip("/")
-    body = f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /app\nDisallow: /descargar/\n\nSitemap: {origin}/sitemap.xml\n"
-    return app.response_class(body, mimetype="text/plain")
+    if MAINTENANCE_MODE:
+        return app.response_class("User-agent: *\nDisallow: /\n", mimetype="text/plain")
+    body = (f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /app\nDisallow: /admin\nDisallow: /descargar/\n\n"
+            f"# Quincena VE es un producto de Gigadevs Corp\nSitemap: {origin}/sitemap.xml\n")
+    response = app.response_class(body, mimetype="text/plain")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 @limiter.exempt
@@ -1141,7 +1194,9 @@ def android_asset_links():
 def sitemap():
     origin = public_origin() or request.url_root.rstrip("/")
     pages = [("/", "1.0", "weekly"), ("/terminos", "0.3", "yearly"), ("/privacidad", "0.3", "yearly"), ("/cookies", "0.2", "yearly")]
-    urls = "".join(f"<url><loc>{origin}{path}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>" for path, prio, freq in pages)
+    lastmod = os.getenv("SITEMAP_LASTMOD") or date.today().isoformat()
+    urls = "".join(f"<url><loc>{origin}{path}</loc><lastmod>{lastmod}</lastmod><changefreq>{freq}</changefreq><priority>{prio}</priority></url>"
+                   for path, prio, freq in pages)
     return app.response_class(f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>', mimetype="application/xml")
 
 
@@ -3073,30 +3128,70 @@ def admin_binance():
         return jsonify(error="No se pudo consultar Binance. Inténtalo en unos minutos."), 502
 
 
-@app.errorhandler(413)
-def request_too_large(_error):
-    return jsonify(error="La solicitud supera el tamaño máximo permitido."), 413
+ERROR_PAGES = {
+    400: ("Solicitud no válida", "La petición llegó incompleta o con datos que no se pueden procesar.", "Vuelve a la página anterior e inténtalo de nuevo."),
+    401: ("Sesión requerida", "Para ver esto necesitas iniciar sesión.", "Entra a la app con tu correo y tu clave."),
+    403: ("Acceso denegado", "No tienes permiso para ver esta página.", "Si crees que es un error, escríbenos."),
+    404: ("Página no encontrada", "La dirección no existe o cambió.", "Revisa el enlace o vuelve al inicio."),
+    405: ("Acción no permitida", "Esta dirección no acepta ese tipo de solicitud.", "Usa los botones de la app en lugar de escribir la dirección."),
+    413: ("Archivo demasiado grande", "La solicitud supera el tamaño máximo permitido.", "Reduce el archivo e inténtalo de nuevo."),
+    429: ("Demasiados intentos", "Recibimos muchas solicitudes seguidas desde tu conexión y las frenamos por seguridad.", "Espera unos minutos e inténtalo de nuevo."),
+    500: ("Algo salió mal", "Ocurrió un error inesperado en el servidor. Tus datos están a salvo.", "Inténtalo de nuevo en unos minutos; si se repite, escríbenos con el código de referencia."),
+    503: ("Estamos en mantenimiento", "Quincena VE se está actualizando.", "Vuelve en unos minutos: tus datos están seguros."),
+}
+_ERROR_TEMPLATE = None
 
 
-@app.errorhandler(429)
-def too_many_requests(_error):
-    return jsonify(error="Demasiados intentos. Espera unos minutos e inténtalo de nuevo."), 429
+def error_response(code: int, ref: str | None = None):
+    """API → JSON (como siempre, la app lo muestra). Web → página propia de la marca, sin trazas ni detalles internos."""
+    global _ERROR_TEMPLATE
+    title, message, advice = ERROR_PAGES.get(code, ERROR_PAGES[500])
+    if request.path.startswith("/api/"):
+        text = {413: "La solicitud supera el tamaño máximo permitido.", 429: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+                404: "No encontrado.", 405: "Método no permitido.", 500: "Algo salió mal en el servidor. Inténtalo de nuevo en unos minutos."}.get(code, message)
+        body = {"error": text}
+        if ref:
+            body["ref"] = ref
+        response = jsonify(body)
+    else:
+        try:
+            if _ERROR_TEMPLATE is None:
+                _ERROR_TEMPLATE = (Path(app.static_folder) / "error.html").read_text(encoding="utf-8")
+            html = _ERROR_TEMPLATE
+        except OSError:
+            html = "<!doctype html><title>{{CODIGO}}</title><h1>{{CODIGO}} · {{TITULO}}</h1><p>{{MENSAJE}}</p>{{REF}}<p><a href='/'>Inicio</a></p>"
+        html = (html.replace("{{CODIGO}}", str(code)).replace("{{TITULO}}", html_escape(title)).replace("{{MENSAJE}}", html_escape(message))
+                .replace("{{CONSEJO}}", html_escape(advice))
+                .replace("{{REF}}", f'<p class="ref">Código de referencia: <code>{html_escape(ref)}</code></p>' if ref else ""))
+        response = app.response_class(html, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+    response.status_code = code
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    if code == 503:
+        response.headers["Retry-After"] = "300"
+    return response
 
 
-@app.errorhandler(404)
-def not_found(error):
-    return (jsonify(error="No encontrado."), 404) if request.path.startswith("/api/") else error
+def _make_error_handler(code):
+    def handler(_error):
+        return error_response(code)
+    return handler
 
 
-@app.errorhandler(405)
-def method_not_allowed(error):
-    return (jsonify(error="Método no permitido."), 405) if request.path.startswith("/api/") else error
+for _code in (400, 401, 403, 404, 405, 413, 429, 503):
+    app.register_error_handler(_code, _make_error_handler(_code))
 
 
 @app.errorhandler(500)
-def server_error(_error):
-    app.logger.exception("Error interno")  # el detalle queda solo en el registro del servidor
-    return jsonify(error="Algo salió mal en el servidor. Inténtalo de nuevo en unos minutos."), 500
+def server_error(error):
+    ref = secrets.token_hex(4).upper()
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001 — la base puede ser justo lo que falló
+        pass
+    original = getattr(error, "original_exception", None) or error
+    app.logger.error("Error interno ref=%s %s %s", ref, request.method, request.path, exc_info=original)  # detalle solo en el registro
+    return error_response(500, ref)
 
 
 with app.app_context():
