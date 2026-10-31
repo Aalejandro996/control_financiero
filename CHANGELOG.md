@@ -29,6 +29,19 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 - Página principal con estilo y animaciones tipo Apple, con los mismos colores: menú translúcido, títulos grandes, secciones que aparecen al bajar, teléfono que se endereza y montos que cuentan.
 - Sección completa del negocio: qué incluye, cómo empezar en tres pasos, comparación Gratis vs Plus, preguntas nuevas y botón de cuenta de negocio al final.
 
+## [Sin publicar · SEO, seguridad y páginas de error] — 31 oct 2026
+
+### Corregido
+- **Web:** la portada se enviaba con la cabecera `X-Robots-Tag: noindex`, que le pedía a Google NO indexarla.
+  Ahora la portada y las páginas legales son indexables; la app, la API y el panel siguen ocultos.
+
+### Agregado
+- **Web:** páginas de error propias de Quincena VE (400, 401, 403, 404, 405, 413, 429, 500 y 503). La API sigue
+  respondiendo JSON. La 500 muestra un código de referencia y nunca detalles internos.
+- **Web:** `/.well-known/security.txt` y `lastmod` en el sitemap; `/admin` fuera de los buscadores.
+- **Servidor:** modo mantenimiento con `MAINTENANCE_MODE=1` (503 con Retry-After; `/healthz` sigue respondiendo).
+- **Servidor:** las rutas típicas de escáneres (`.env`, `.git`, `wp-admin`, `*.php`…) se cortan con un 404 inmediato.
+
 ## [Sin publicar · tasa BCV del sitio oficial, euro y tasa del negocio] — 28 oct 2026
 
 ### Corregido
