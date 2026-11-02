@@ -68,27 +68,36 @@ const bytes=b=>b==null?'—':b>1e9?money(b/1e9,1)+' GB':b>1e6?money(b/1e6,1)+' M
 function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3200)}
 async function api(url,o={}){const h={'Content-Type':'application/json'};if(S.csrf&&o.method&&o.method!=='GET')h['X-CSRF-Token']=S.csrf;
   const r=await fetch(url,{credentials:'same-origin',...o,headers:h});const p=await r.json().catch(()=>({}));if(!r.ok)throw new Error(p.error||'Error ('+r.status+')');return p}
-const TABS=[['resumen','Resumen'],['usuarios','Usuarios'],['cobros','Cobros Plus'],['nueva','Nueva factura'],['ajustes','Facturación']];
-function tabs(){$('#tabs').innerHTML=TABS.map(([k,l])=>`<button class="${S.tab===k?'on':''}" data-tab="${k}">${l}</button>`).join('')}
+const TABS=[['resumen','Resumen'],['sugerencias','Sugerencias'],['usuarios','Usuarios'],['cobros','Cobros Plus'],['nueva','Nueva factura'],['ajustes','Facturación']];
+function tabs(){$('#tabs').innerHTML=TABS.map(([k,l])=>`<button class="${S.tab===k?'on':''}" data-tab="${k}">${l}${k==='sugerencias'&&S.newSug?` <span class="pill plus">${S.newSug}</span>`:''}</button>`).join('')}
 const METHODS={binance:'Binance (USDT)',pago_movil:'Pago móvil',transferencia:'Transferencia',zelle:'Zelle',efectivo_usd:'Efectivo $',efectivo_bs:'Efectivo Bs.',otro:'Otro'};
 
 async function render(){tabs();const m=$('#main');try{m.innerHTML=await VIEWS[S.tab]()}catch(e){m.innerHTML=`<div class="note warn">${esc(e.message)}</div>`}after()}
 function after(){if(S.tab==='nueva')calc()}
 
 const VIEWS={
-async resumen(){const o=await api('/api/admin/overview');const u=o.users,i=o.income,d=o.database;
+async resumen(){const o=await api('/api/admin/overview');S.newSug=o.suggestions.new;tabs();const u=o.users,i=o.income,d=o.database;
   const k=(t,v,s='')=>`<div class="card kpi"><small>${t}</small><b>${v}</b><span>${s}</span></div>`;
   const max=Math.max(1,...d.tables.map(t=>t.rows));
   return `<div class="sec"><h2>Resumen</h2></div><div class="grid">
    ${k('Cuentas',u.total,`${u.new_7} nuevas en 7 días · ${u.new_30} en 30`)}${k('Activas esta semana',u.active_7,'usaron la app en 7 días')}
    ${k('Correo confirmado',u.verified,`de ${u.total}`)}${k('Con negocio',u.business,`${u.plus} con Plus · ${u.sellers} vendedores`)}
-   ${k('Cobrado este mes','$ '+money(i.month_usd),`${i.month_count} factura(s)`)}${k('Cobrado en total','$ '+money(i.total_usd),`${i.total_count} factura(s)`)}</div>
+   ${k('Sugerencias nuevas',o.suggestions.new,`${o.suggestions.total} en total`)}${k('Cobrado este mes','$ '+money(i.month_usd),`${i.month_count} factura(s)`)}${k('Cobrado en total','$ '+money(i.total_usd),`${i.total_count} factura(s)`)}</div>
   <div class="sec"><h2>Base de datos</h2><span class="pill mut">${esc(d.engine)}</span><span class="mut small">Tamaño: ${bytes(d.bytes)}</span></div>
   <div class="tw"><table><tr><th>Tabla</th><th class="r">Filas</th><th class="r">Tamaño</th><th style="width:30%"></th></tr>
    ${d.tables.map(t=>`<tr><td>${esc(t.name)}</td><td class="r">${t.rows}</td><td class="r">${bytes(t.bytes)}</td><td><div class="bar"><i style="width:${Math.max(2,t.rows/max*100)}%"></i></div></td></tr>`).join('')}</table></div>
   <div class="sec"><h2>Servicios</h2></div><div class="grid">
    <div class="card"><b>Correos (Brevo)</b><p class="small ${o.mail.configured?'':'mut'}">${o.mail.configured?'Configurado':'Sin configurar'}${o.mail.problem?' · '+esc(o.mail.problem):''}</p></div>
    <div class="card"><b>Binance</b><p class="small">${o.binance.configured?'Conectado (solo lectura)':'Sin conectar: agrega BINANCE_API_KEY y BINANCE_API_SECRET en Render.'}</p></div></div>`},
+
+async sugerencias(){const r=await api('/api/admin/suggestions');S.newSug=r.new;tabs();const f=S.sf||'todas';
+  const list=r.suggestions.filter(x=>f==='todas'||x.status===f);const K={idea:'Idea',problema:'Problema',otro:'Otro'};
+  return `<div class="sec"><h2>Sugerencias de los clientes</h2><span class="sp"></span><div class="row">${['todas','nueva','vista','hecha'].map(k=>`<button class="btn ${f===k?'':'o'} s" data-act="sf" data-f="${k}">${k==='todas'?'Todas':k==='nueva'?'Nuevas':k==='vista'?'Vistas':'Hechas'}</button>`).join('')}</div></div>
+  ${list.length?`<div class="tw"><table><tr><th>Fecha</th><th>Cliente</th><th>Sugerencia</th><th>Estado</th></tr>${list.map(x=>`<tr><td>${day(x.created_at)}<br><span class="small mut">${x.platform==='android'?'App':'Web'}</span></td>
+   <td><b>${esc(x.username||'Cuenta borrada')}</b><br><span class="small mut">${esc(x.email||'')}</span></td>
+   <td><span class="pill ${x.kind==='problema'?'bad':''}">${K[x.kind]||'Idea'}</span><p style="margin:6px 0 0;white-space:pre-wrap">${esc(x.text)}</p></td>
+   <td><select data-sug="${x.id}" style="width:auto">${['nueva','vista','hecha'].map(k=>`<option value="${k}" ${x.status===k?'selected':''}>${k==='nueva'?'Nueva':k==='vista'?'Vista':'Hecha'}</option>`).join('')}</select></td></tr>`).join('')}</table></div>`
+  :'<div class="card mut">Aún no hay sugerencias aquí. Los clientes las envían desde Más › Enviar sugerencia, en la web y en la app.</div>'}`},
 
 async usuarios(){S.users=(await api('/api/admin/users')).users;const q=(S.q||'').toLowerCase();
   const list=S.users.filter(u=>!q||[u.username,u.email,u.business].some(x=>String(x||'').toLowerCase().includes(q)));
@@ -171,6 +180,7 @@ function calc(){const fm=$('#fnueva'),c=$('#calc');if(!fm||!c)return;const b=S.s
 function fillFromUser(name){const u=(S.users||[]).find(x=>x.username===name.trim().toLowerCase());const fm=$('#fnueva');if(!u||!fm)return;
   if(!fm.email.value)fm.email.value=u.email||'';if(!fm.name.value)fm.name.value=u.business||u.username}
 
+document.addEventListener('change',async e=>{const id=e.target.dataset?.sug;if(!id)return;try{await api('/api/admin/suggestions/'+id,{method:'PATCH',body:JSON.stringify({status:e.target.value})});toast('Estado guardado.');render()}catch(err){toast(err.message)}});
 document.addEventListener('input',e=>{if(e.target.id==='q'){S.q=e.target.value;clearTimeout(S._q);S._q=setTimeout(async()=>{const p=e.target.selectionStart;await render();const q=$('#q');q.focus();q.setSelectionRange(p,p)},250)}
   if(e.target.form?.id==='fnueva'){if(e.target.name==='username')fillFromUser(e.target.value);calc()}});
 
@@ -178,6 +188,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('[data-tab]
   if(t.dataset.tab){if($('#dlg').open)$('#dlg').close();S.tab=t.dataset.tab;if(S.tab!=='nueva')S.form=null;render();return}
   const a=t.dataset.act,id=t.dataset.id;e.preventDefault();
   try{
+  if(a==='sf'){S.sf=t.dataset.f;render();return}
   if(a==='factura'){S.form={username:t.dataset.u};S.tab='nueva';await render();fillFromUser(t.dataset.u);return}
   if(a==='plan'){const d=prompt(`Plus para ${t.dataset.u}: ¿cuántos días? (0 = quitar el Plus)`,'30');if(d===null)return;const n=parseInt(d,10)||0;
     await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify(n>0?{plan:'plus',days:n}:{plan:'free'})});toast(n>0?'Plus activado.':'Volvió al plan gratis.');render();return}

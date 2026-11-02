@@ -8,6 +8,14 @@ Formato: **Agregado** (nuevo), **Cambiado** (mejoras), **Corregido** (errores), 
 
 ---
 
+## Mejoras pedidas por los clientes (web)
+- Enviar sugerencia desde Más; el administrador las lee y marca en /admin › Sugerencias.
+- Gastos con fecha: se puede anotar un gasto de otro día (nunca futuro); en Bs. usa la tasa BCV de ese día si está guardada.
+- Ver los montos en $ (BCV), USDT, € (BCV) o Bs.
+- Pagos fijos y compromisos alineados: un pago fijo puede anotarse solo o marcarse al pagarlo; Pagos › Compromisos muestra los pagos de cada mes y los pagos únicos; avisa si algo ya existe para no contarlo dos veces; los pagos fijos que faltan se descuentan de lo que te queda.
+- Plan de pagos: cuánto pagar al mes y por quincena, orden de pago con lo que toca a cada deuda este mes, cuándo terminas cada una, comparación de estrategias y botón para programar los pagos del mes.
+- Quinci, la mascota: aparece en Inicio con un mensaje según tu situación (deudas, pagos por vencer, presupuesto, racha) y reacciona al anotar gastos, abonar o crear el plan.
+
 ## Android 1.23: confirmar el correo desde el enlace
 - Al abrir el enlace de confirmación, la app cancelaba la consulta antes de enviarla y mostraba «The coroutine scope left the composition»; el correo no quedaba confirmado. Ahora la confirmación corre aparte y termina.
 - Las etiquetas de la barra inferior (p. ej. «Movimientos») ya no se cortan.

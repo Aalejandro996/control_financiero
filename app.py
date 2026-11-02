@@ -251,6 +251,17 @@ class DeviceToken(db.Model):
     revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
 
+class Suggestion(db.Model):
+    """Sugerencias que mandan las personas desde Más (web y app); el administrador las lee en /admin."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
+    text = db.Column(db.String(1000), nullable=False)
+    kind = db.Column(db.String(16), nullable=False, default="idea")  # idea | problema | otro
+    platform = db.Column(db.String(16), nullable=True)  # web | android
+    status = db.Column(db.String(16), nullable=False, default="nueva")  # nueva | vista | hecha
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class EmailVerification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -609,7 +620,8 @@ def normalize_shared_data(value) -> dict:
     result = copy.deepcopy(DEFAULT_SHARED_DATA)
     result["country"] = clean_country(value.get("country"))
     default_rate = COUNTRIES[result["country"]]["rate"]
-    result["currency"] = "BS" if value.get("currency") in ("BS", "VES") else "USD"
+    # Moneda en que la persona ve los montos: $ (BCV), USDT, € (BCV) o la moneda local.
+    result["currency"] = "BS" if value.get("currency") in ("BS", "VES") else value.get("currency") if value.get("currency") in ("USDT", "EUR") else "USD"
     try:
         rate = float(value.get("exchangeRate", default_rate))
     except (TypeError, ValueError):
@@ -905,6 +917,7 @@ def normalize_shared_data(value) -> dict:
             "createdAt": str(row.get("createdAt") or "")[:40],
             "paidAt": str(row.get("paidAt") or "")[:40],
             "paymentChoice": row.get("paymentChoice") if row.get("paymentChoice") in {"minimum", "total", "custom"} else "custom",
+            "auto": row.get("auto") is True,  # lo programó el plan de pagos ("Programar los pagos de este mes")
         })
     result["plannedDebtPayments"] = planned_rows
     raw_rec = value.get("recurring", [])
@@ -929,6 +942,8 @@ def normalize_shared_data(value) -> dict:
             "currency": "BS" if row.get("currency") in ("BS", "VES") else "USD",
             "category": row.get("category") if row.get("category") in {"comida", "transporte", "fijo", "hormiga", "salud", "hogar", "ocio", "educacion", "deudas"} else "fijo",
             "day": min(31, max(1, day)), "active": bool(row.get("active", True)),
+            # auto: se anota solo el día indicado. manual: aparece en Compromisos y se marca al pagarlo.
+            "mode": "manual" if row.get("mode") == "manual" else "auto",
             "lastGenerated": last if re.fullmatch(r"\d{4}-\d{2}", last) else "",
         })
     result["recurring"] = rec_rows
@@ -2567,6 +2582,7 @@ def delete_account():
     PushSubscription.query.filter_by(user_id=uid).delete()
     User.query.filter_by(owner_id=uid).update({"active": False})
     ReminderDelivery.query.filter_by(user_id=uid).delete()
+    Suggestion.query.filter_by(user_id=uid).update({"user_id": None})
     SharedState.query.filter_by(user_id=uid).delete()
     SharedState.query.filter_by(updated_by=uid).update({"updated_by": None})
     AuditEvent.query.filter_by(user_id=uid).update({"user_id": None})
@@ -2907,7 +2923,7 @@ def admin_overview():
     payments = PlusPayment.query.filter(PlusPayment.void_at.is_(None)).all()
     month = [p for p in payments if _aware(p.created_at) >= month_start]
     tables, size = [], None
-    for model in (User, SharedState, AuditEvent, PlusPayment, DeviceToken, PushSubscription, EmailVerification, PasswordReset, UserPasskey, ReminderDelivery, AppSetting):
+    for model in (User, SharedState, AuditEvent, PlusPayment, Suggestion, DeviceToken, PushSubscription, EmailVerification, PasswordReset, UserPasskey, ReminderDelivery, AppSetting):
         tables.append({"name": model.__tablename__, "rows": db.session.query(model).count()})
     if db.engine.dialect.name == "postgresql":
         try:
@@ -2925,7 +2941,8 @@ def admin_overview():
         income={"month_usd": round(sum(payment_totals(p)["pay_usd"] for p in month), 2), "month_count": len(month),
                 "total_usd": round(sum(payment_totals(p)["pay_usd"] for p in payments), 2), "total_count": len(payments)},
         database={"engine": db.engine.dialect.name, "bytes": size, "tables": tables},
-        mail={"configured": mail_configured(), "problem": mail_problem()}, binance={"configured": bool(binance_client())})
+        mail={"configured": mail_configured(), "problem": mail_problem()}, binance={"configured": bool(binance_client())},
+        suggestions={"new": Suggestion.query.filter_by(status="nueva").count(), "total": Suggestion.query.count()})
 
 
 @app.get("/api/admin/users")
@@ -3059,6 +3076,47 @@ def admin_payment_pdf(payment_id: int):
     response.headers["Content-Disposition"] = f'inline; filename="Factura_{doc_number(p)}.pdf"'
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.post("/api/suggestions")
+@require_auth()
+@limiter.limit("10 per hour")
+def send_suggestion():
+    body = request.get_json(silent=True) or {}
+    text = re.sub(r"\s+", " ", str(body.get("text") or "")).strip()
+    if len(text) < 5:
+        return jsonify(error="Cuéntanos un poco más (mínimo 5 letras)."), 400
+    kind = body.get("kind") if body.get("kind") in ("idea", "problema", "otro") else "idea"
+    platform = body.get("platform") if body.get("platform") in ("web", "android") else ("android" if getattr(g, "via_token", False) else "web")
+    db.session.add(Suggestion(user_id=g.user.id, text=text[:1000], kind=kind, platform=platform))
+    db.session.commit()
+    audit("suggestion_sent", f"Sugerencia ({kind}, {platform})", g.user.id)
+    return jsonify(ok=True), 201
+
+
+@app.get("/api/admin/suggestions")
+@require_auth(admin=True)
+def admin_suggestions():
+    rows = Suggestion.query.order_by(Suggestion.created_at.desc()).limit(500).all()
+    users = {u.id: (u.username, u.email) for u in User.query.filter(User.id.in_([r.user_id for r in rows if r.user_id])).all()}
+    return jsonify(suggestions=[{"id": r.id, "text": r.text, "kind": r.kind, "platform": r.platform, "status": r.status,
+                                 "username": users.get(r.user_id, (None, None))[0], "email": users.get(r.user_id, (None, None))[1],
+                                 "created_at": _aware(r.created_at).isoformat()} for r in rows],
+                   new=sum(r.status == "nueva" for r in rows))
+
+
+@app.patch("/api/admin/suggestions/<int:suggestion_id>")
+@require_auth(admin=True)
+def admin_suggestion_status(suggestion_id: int):
+    row = db.session.get(Suggestion, suggestion_id)
+    if not row:
+        return jsonify(error="No encontrada."), 404
+    status = (request.get_json(silent=True) or {}).get("status")
+    if status not in ("nueva", "vista", "hecha"):
+        return jsonify(error="Estado no válido."), 400
+    row.status = status
+    db.session.commit()
+    return jsonify(ok=True)
 
 
 @app.get("/api/admin/sample-invoice")
